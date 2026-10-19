@@ -49,7 +49,9 @@ _SERIALIZER = TypeSerializer()
 _DEVELOPER_GROUPS = {"developers", "admins"}
 _ADMIN_GROUPS = {"admins"}
 _RESERVATION_STATES = {"HELD", "ACTIVE", "EXPIRED", "CANCELLED", "RELEASED", "SETTLED"}
-_CORS_ORIGIN = os.environ.get("CORS_ALLOWED_ORIGIN", "http://localhost:5173")
+_CORS_ORIGINS = set(
+    os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+)
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,15 @@ def _entrypoint(operation: str, event: dict):
 
 def route_request(operation: str, event: dict, services: ApiServices) -> dict:
     """Dispatch one route; public here to allow deterministic local tests."""
+    response = _route_request(operation, event, services)
+    origin = _header(event, "origin")
+    if origin and origin in _CORS_ORIGINS:
+        response.setdefault("headers", {})["Access-Control-Allow-Origin"] = origin
+        response["headers"]["Vary"] = "Origin"
+    return response
+
+
+def _route_request(operation: str, event: dict, services: ApiServices) -> dict:
     try:
         identity, groups = authenticated_identity(event)
         if operation in {"put_budget", "calibration_summary", "list_alerts"}:
@@ -306,7 +317,7 @@ def _groups(value) -> set[str]:
         try:
             parsed = json.loads(value)
         except json.JSONDecodeError:
-            parsed = value.split(",")
+            parsed = [group.strip().strip("'\"") for group in value.strip().strip("[]").split(",")]
         value = parsed
     if not isinstance(value, list) or any(not isinstance(group, str) for group in value):
         return set()
@@ -585,7 +596,7 @@ def _response(status: int, body: dict) -> dict:
         "statusCode": status,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": _CORS_ORIGIN,
+            "Access-Control-Allow-Origin": "http://localhost:5173",
             "Vary": "Origin",
         },
         "body": json.dumps(body, default=_json_default, separators=(",", ":")),

@@ -5,6 +5,9 @@ from pathlib import Path
 
 from aws_cdk import CfnOutput, CfnParameter, Duration, RemovalPolicy, Stack, Tags
 from aws_cdk import aws_apigateway as apigateway
+from aws_cdk import aws_apigatewayv2 as apigatewayv2
+from aws_cdk import aws_apigatewayv2_authorizers as apigatewayv2_authorizers
+from aws_cdk import aws_apigatewayv2_integrations as apigatewayv2_integrations
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_events as events
@@ -109,6 +112,7 @@ class ApiStack(Stack):
         construct_id: str,
         *,
         user_pool,
+        user_pool_client_id,
         data_stack,
         state_machine_arn,
         lifecycle_reaper_arn,
@@ -123,7 +127,7 @@ class ApiStack(Stack):
             "ALERTS_TABLE": data_stack.alerts.table_name,
             "WORKFLOW_STATE_MACHINE_ARN": state_machine_arn,
             "LIFECYCLE_REAPER_ARN": lifecycle_reaper_arn,
-            "CORS_ALLOWED_ORIGIN": "http://localhost:5173",
+            "CORS_ALLOWED_ORIGINS": "http://localhost:5173",
         }
         functions = {}
 
@@ -228,79 +232,95 @@ class ApiStack(Stack):
         )
         make_function("list_alerts", "list_alerts_handler", ["dynamodb:Scan"], [alerts_arn])
 
-        authorizer = apigateway.CognitoUserPoolsAuthorizer(
+        cloudfront_origin = CfnParameter(
             self,
+            "CloudFrontOrigin",
+            type="String",
+            description="Deployed frontend origin allowed by API CORS, including scheme and hostname",
+        )
+        table_env["CORS_ALLOWED_ORIGINS"] = f"http://localhost:5173,{cloudfront_origin.value_as_string}"
+        authorizer = apigatewayv2_authorizers.HttpJwtAuthorizer(
             "SpendctlCognitoAuthorizer",
-            cognito_user_pools=[user_pool],
+            user_pool.user_pool_provider_url,
+            jwt_audience=[user_pool_client_id],
             authorizer_name="spendctl-cognito-id-token",
         )
-        api = apigateway.RestApi(
+        access_log_group = logs.LogGroup(
+            self,
+            "ApiAccessLogGroup",
+            log_group_name="/aws/apigateway/spendctl-dev-api",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        rate_limit = self.node.try_get_context("api_throttle_rate") or 50
+        burst_limit = self.node.try_get_context("api_throttle_burst") or 100
+        api = apigatewayv2.HttpApi(
             self,
             "SpendctlApi",
-            rest_api_name="spendctl-dev-api",
+            api_name="spendctl-dev-api",
             description="Authenticated AWS spend admission API",
-            endpoint_types=[apigateway.EndpointType.REGIONAL],
-            deploy_options=apigateway.StageOptions(
-                stage_name="v1",
-                throttling_rate_limit=20,
-                throttling_burst_limit=40,
-            ),
-            default_cors_preflight_options=apigateway.CorsOptions(
-                allow_origins=["http://localhost:5173"],
-                allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+            create_default_stage=False,
+            cors_preflight=apigatewayv2.CorsPreflightOptions(
+                allow_origins=["http://localhost:5173", cloudfront_origin.value_as_string],
+                allow_methods=[
+                    apigatewayv2.CorsHttpMethod.GET,
+                    apigatewayv2.CorsHttpMethod.POST,
+                    apigatewayv2.CorsHttpMethod.PUT,
+                    apigatewayv2.CorsHttpMethod.OPTIONS,
+                ],
                 allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
                 max_age=Duration.hours(1),
             ),
         )
-        api.add_gateway_response(
-            "UnauthorizedResponse",
-            type=apigateway.ResponseType.UNAUTHORIZED,
-            response_headers={
-                "Access-Control-Allow-Origin": "'http://localhost:5173'",
-                "Content-Type": "'application/json'",
-            },
-            templates={
-                "application/json": '{"error":{"code":"UNAUTHENTICATED","message":"A valid Cognito ID token is required","details":{}}}'
-            },
-        )
-        api.add_gateway_response(
-            "AccessDeniedResponse",
-            type=apigateway.ResponseType.ACCESS_DENIED,
-            response_headers={
-                "Access-Control-Allow-Origin": "'http://localhost:5173'",
-                "Content-Type": "'application/json'",
-            },
-            templates={
-                "application/json": '{"error":{"code":"POLICY_DENIED","message":"The requested operation is not authorized","details":{}}}'
-            },
+        apigatewayv2.CfnStage(
+            self,
+            "DefaultStage",
+            api_id=api.api_id,
+            stage_name="$default",
+            auto_deploy=True,
+            default_route_settings=apigatewayv2.CfnStage.RouteSettingsProperty(
+                throttling_rate_limit=float(rate_limit),
+                throttling_burst_limit=float(burst_limit),
+            ),
+            access_log_settings=apigatewayv2.CfnStage.AccessLogSettingsProperty(
+                destination_arn=access_log_group.log_group_arn,
+                format=apigateway.AccessLogFormat.custom(
+                    json.dumps(
+                        {
+                            "requestId": "$context.requestId",
+                            "routeKey": "$context.routeKey",
+                            "status": "$context.status",
+                            "sourceIp": "$context.identity.sourceIp",
+                        },
+                        separators=(",", ":"),
+                    )
+                ).to_string(),
+            ),
         )
 
-        def add_method(resource, method, operation):
-            resource.add_method(
-                method,
-                apigateway.LambdaIntegration(functions[operation]),
-                authorization_type=apigateway.AuthorizationType.COGNITO,
+        def add_route(path, method, operation):
+            api.add_routes(
+                path=path,
+                methods=[getattr(apigatewayv2.HttpMethod, method)],
+                integration=apigatewayv2_integrations.HttpLambdaIntegration(
+                    f"{operation}Integration",
+                    functions[operation],
+                    payload_format_version=apigatewayv2.PayloadFormatVersion.VERSION_2_0,
+                ),
                 authorizer=authorizer,
             )
 
-        v1 = api.root.add_resource("v1")
-        add_method(v1.add_resource("estimate"), "POST", "estimate")
-        requests = v1.add_resource("requests")
-        add_method(requests, "POST", "create_request")
-        request_id = requests.add_resource("{id}")
-        add_method(request_id, "GET", "get_request")
-        add_method(request_id.add_resource("cancel"), "POST", "cancel_request")
-        add_method(v1.add_resource("reservations"), "GET", "list_reservations")
-        budgets = v1.add_resource("budgets")
-        budget = budgets.add_resource("{team}")
-        add_method(budget, "GET", "get_budget")
-        add_method(budget, "PUT", "put_budget")
-        add_method(
-            v1.add_resource("calibration").add_resource("summary"), "GET", "calibration_summary"
-        )
-        add_method(v1.add_resource("alerts"), "GET", "list_alerts")
+        add_route("/v1/estimate", "POST", "estimate")
+        add_route("/v1/requests", "POST", "create_request")
+        add_route("/v1/requests/{id}", "GET", "get_request")
+        add_route("/v1/requests/{id}/cancel", "POST", "cancel_request")
+        add_route("/v1/reservations", "GET", "list_reservations")
+        add_route("/v1/budgets/{team}", "GET", "get_budget")
+        add_route("/v1/budgets/{team}", "PUT", "put_budget")
+        add_route("/v1/calibration/summary", "GET", "calibration_summary")
+        add_route("/v1/alerts", "GET", "list_alerts")
 
-        CfnOutput(self, "ApiUrl", value=api.url)
+        CfnOutput(self, "ApiUrl", value=f"{api.api_endpoint}/v1")
 
 
 class OrchestrationStack(Stack):

@@ -18,8 +18,9 @@ Demo request default is gp3 8 GB. V1 validation permits gp3 1–30 GB and 1–24
 
 ## M5 handler and response details
 
-API Gateway uses a Cognito User Pool authorizer for every route. The authorizer
-validates the signed token against the configured pool; Lambda handlers accept
+API Gateway HTTP API v2 uses a JWT authorizer for every route, with the Cognito
+pool issuer and web-client ID as the issuer and audience. The authorizer
+validates the signed ID token against the configured pool; Lambda handlers accept
 identity only from `requestContext.authorizer` claims (`sub`, `custom:team`, and
 `cognito:groups`). A request body's `team` is checked against the trusted team
 claim and never grants access. Members of `developers` or `admins` may use
@@ -75,7 +76,12 @@ must retry with the same idempotency key. For an ambiguous M4 ledger outcome, no
 workflow is started because the hold is not confirmed. For an ambiguous M6 start,
 the reservation is confirmed, but execution identity/status is unresolved; retry
 only reconciles the deterministic execution and never releases the hold. API
-Gateway authorizer-generated 401/403 responses use the same error envelope.
+HTTP API JWT-authorizer rejections occur before Lambda and use API Gateway's
+native unauthorized response; HTTP API v2 does not expose REST API
+`GatewayResponse` templates. Handler-generated 401/403 responses retain the
+documented error envelope. This transport-level unauthorized response
+difference is recorded in `docs/contract-changes.md` and must be checked by a
+live API test.
 
 ## Local and live verification boundary
 
@@ -87,7 +93,11 @@ rules are locally synthesized and mock-tested only; no state machine, Lambda,
 IAM policy evaluation, schedule delivery, CloudTrail integration, subnet,
 security group, AMI resolution, EC2 launch/termination, volume deletion, or
 orphan audit has been verified in AWS.
-The CDK stack configures Cognito authorization, regional API Gateway, local
-development CORS (`http://localhost:5173`), stage throttling (20 requests/sec,
-burst 40), Python 3.12 Lambdas (256 MB, 10 seconds), and one narrowly scoped
-role per Lambda. No deployment or live AWS authentication test was performed.
+The HTTP API sends Lambda payload format 2.0 events. Handlers read claims from
+`requestContext.authorizer.jwt.claims`, body/base64 fields, and HTTP API v2 path,
+query and headers. The `$default` stage uses rate 50/burst 100 by default;
+`api_throttle_rate` and `api_throttle_burst` CDK context values override these
+for isolated load tests. CORS permits localhost and the required CloudFront
+origin parameter. Access logs include the API request ID. Each route retains a
+separate Lambda role. No deployment or live AWS authentication/API test was
+performed.

@@ -4,6 +4,19 @@
 
 The repository began empty. The uploaded text available in this task is the master project prompt; a separate Team Build Guide was not attached. The API paths/statuses/error envelope, reservation states, EventBridge event names, table semantics, and M0–M12 boundaries in that prompt are treated as frozen. Contract alterations must be recorded in `docs/contract-changes.md` before changing implementation.
 
+## M5 HTTP API v2
+
+M5 uses API Gateway HTTP API v2 as required by the project specification. Its
+JWT authorizer uses the Cognito user-pool issuer and public app-client ID as the
+issuer and audience. Lambda payload format 2.0 claims are read only from
+`requestContext.authorizer.jwt.claims`; malformed group strings such as
+`[admins]` are normalized by the handler adapter. The default stage throttles
+at 50 requests/second with burst 100 and accepts context overrides for isolated
+load testing. The CloudFront CORS origin is a required deployment parameter;
+localhost remains allowed for local development. Access logs include the API
+request ID. These infrastructure changes leave route paths and handler
+response shapes unchanged.
+
 ## gp3 sizing
 
 The API and v1 policy accept gp3 sizes from 1 through 30 GB. The 8 GB figure in cost-safety examples is the default demo request only. Validation enforces the former and demo configuration uses the latter.

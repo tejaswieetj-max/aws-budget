@@ -30,6 +30,7 @@ api = ApiStack(
     app,
     "ApiStack",
     user_pool=identity.pool,
+    user_pool_client_id=identity.client.user_pool_client_id,
     data_stack=data,
     state_machine_arn=orchestration.state_machine_arn,
     lifecycle_reaper_arn=lifecycle.reaper.function_arn,

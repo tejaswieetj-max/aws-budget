@@ -26,10 +26,11 @@ def event(*, body=None, claims=None, path=None, query=None, headers=None):
         "headers": headers or {},
         "pathParameters": path or {},
         "queryStringParameters": query or {},
+        "rawPath": "/v1/test",
+        "version": "2.0",
         "requestContext": {
-            "authorizer": {
-                "claims": claims,
-            }
+            "http": {"method": "GET", "path": "/v1/test"},
+            "authorizer": {"jwt": {"claims": claims}},
         },
     }
 
@@ -179,6 +180,15 @@ def test_missing_or_non_developer_claims_are_rejected(services):
             }
         },
     )
+
+
+def test_v2_group_claim_in_bracket_string_form_is_parsed(services):
+    response = route_request(
+        "calibration_summary",
+        event(claims=claims(groups="[admins]")),
+        services,
+    )
+    assert unpack(response)[0] == 200
 
 
 def test_post_estimate_and_validation_error(services):
