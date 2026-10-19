@@ -7,9 +7,12 @@ from aws_cdk import CfnOutput, CfnParameter, Duration, RemovalPolicy, Stack, Tag
 from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_events as events
+from aws_cdk import aws_events_targets as event_targets
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_ssm as ssm
 from aws_cdk import aws_stepfunctions as stepfunctions
 from constructs import Construct
@@ -108,6 +111,7 @@ class ApiStack(Stack):
         user_pool,
         data_stack,
         state_machine_arn,
+        lifecycle_reaper_arn,
         **kwargs,
     ):
         super().__init__(scope, construct_id, **kwargs)
@@ -118,6 +122,7 @@ class ApiStack(Stack):
             "COST_SAMPLES_TABLE": data_stack.samples.table_name,
             "ALERTS_TABLE": data_stack.alerts.table_name,
             "WORKFLOW_STATE_MACHINE_ARN": state_machine_arn,
+            "LIFECYCLE_REAPER_ARN": lifecycle_reaper_arn,
             "CORS_ALLOWED_ORIGIN": "http://localhost:5173",
         }
         functions = {}
@@ -195,8 +200,11 @@ class ApiStack(Stack):
         make_function(
             "get_request", "get_request_handler", ["dynamodb:GetItem"], [reservations_arn]
         )
-        make_function(
+        cancel_request = make_function(
             "cancel_request", "cancel_request_handler", ["dynamodb:GetItem"], [reservations_arn]
+        )
+        cancel_request.role.add_to_policy(
+            iam.PolicyStatement(actions=["lambda:InvokeFunction"], resources=[lifecycle_reaper_arn])
         )
         make_function(
             "list_reservations",
@@ -296,7 +304,15 @@ class ApiStack(Stack):
 
 
 class OrchestrationStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, *, data_stack, **kwargs):
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        data_stack,
+        lifecycle_stack,
+        **kwargs,
+    ):
         super().__init__(scope, construct_id, **kwargs)
         Tags.of(self).add("project", "spendctl")
         Tags.of(self).add("env", "dev")
@@ -385,6 +401,17 @@ class OrchestrationStack(Stack):
             iam.PolicyStatement(
                 principals=[iam.ArnPrincipal(provisioner_role.role_arn)],
                 actions=["sts:TagSession"],
+                conditions={
+                    "StringLike": {"aws:RequestTag/reservation-id": "rsv_*"},
+                    "Null": {"aws:RequestTag/team": "false"},
+                    "ForAllValues:StringEquals": {"aws:TagKeys": ["reservation-id", "team"]},
+                },
+            )
+        )
+        provisioner_policy_role.assume_role_policy.add_statements(
+            iam.PolicyStatement(
+                principals=[iam.ArnPrincipal(lifecycle_stack.reaper_role.role_arn)],
+                actions=["sts:AssumeRole", "sts:TagSession"],
                 conditions={
                     "StringLike": {"aws:RequestTag/reservation-id": "rsv_*"},
                     "Null": {"aws:RequestTag/team": "false"},
@@ -507,7 +534,33 @@ class OrchestrationStack(Stack):
             {
                 "BUDGETS_TABLE": data_stack.budgets.table_name,
                 "RESERVATIONS_TABLE": data_stack.reservations.table_name,
+                "EXPIRY_SCHEDULE_GROUP": lifecycle_stack.schedule_group_name,
+                "LIFECYCLE_REAPER_ARN": lifecycle_stack.reaper.function_arn,
+                "SCHEDULER_TARGET_ROLE_ARN": lifecycle_stack.scheduler_role.role_arn,
+                "EVENT_BUS_NAME": lifecycle_stack.event_bus.event_bus_name,
             },
+        )
+        schedule_arn = (
+            f"arn:{self.partition}:scheduler:{self.region}:{self.account}:schedule/"
+            f"{lifecycle_stack.schedule_group_name}/*"
+        )
+        activate.role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["scheduler:CreateSchedule", "scheduler:GetSchedule"],
+                resources=[schedule_arn],
+            )
+        )
+        activate.role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["iam:PassRole"],
+                resources=[lifecycle_stack.scheduler_role.role_arn],
+                conditions={"StringEquals": {"iam:PassedToService": "scheduler.amazonaws.com"}},
+            )
+        )
+        activate.role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["events:PutEvents"], resources=[lifecycle_stack.event_bus.event_bus_arn]
+            )
         )
         record_resources = make_lambda(
             "record_resources",
@@ -897,7 +950,219 @@ class OrchestrationStack(Stack):
 
 
 class LifecycleStack(Stack):
-    pass
+    def __init__(self, scope: Construct, construct_id: str, *, data_stack, **kwargs):
+        super().__init__(scope, construct_id, **kwargs)
+        Tags.of(self).add("project", "spendctl")
+        Tags.of(self).add("env", "dev")
+        source = str(Path(__file__).resolve().parents[2] / "services")
+        self.event_bus = events.EventBus(
+            self, "SpendctlEventBus", event_bus_name="spendctl-bus"
+        )
+        self.schedule_group_name = "spendctl-expiry"
+        self.schedule_group = scheduler.CfnScheduleGroup(
+            self, "ExpiryScheduleGroup", name=self.schedule_group_name
+        )
+        machine_arn = (
+            f"arn:{self.partition}:states:{self.region}:{self.account}:"
+            "stateMachine:spendctl-dev-provisioning"
+        )
+        execution_arn = (
+            f"arn:{self.partition}:states:{self.region}:{self.account}:"
+            "execution:spendctl-dev-provisioning:*"
+        )
+        provisioner_role_arn = (
+            f"arn:{self.partition}:iam::{self.account}:role/spendctl-dev-provisioner-role"
+        )
+
+        def function(name, handler, actions, resources, environment, timeout_seconds=10):
+            function_name = f"spendctl-dev-m7-{name.replace('_', '-')}"
+            log_group = logs.LogGroup(
+                self,
+                f"{name}LogGroup",
+                log_group_name=f"/aws/lambda/{function_name}",
+                retention=logs.RetentionDays.ONE_MONTH,
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            role = iam.Role(
+                self,
+                f"{name}Role",
+                role_name=f"{function_name}-role",
+                assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            )
+            role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                    resources=[f"{log_group.log_group_arn}:*"],
+                )
+            )
+            if actions:
+                role.add_to_policy(iam.PolicyStatement(actions=actions, resources=resources))
+            fn = lambda_.Function(
+                self,
+                f"{name}Function",
+                function_name=function_name,
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                handler=f"spendctl.lifecycle_handlers.{handler}",
+                code=lambda_.Code.from_asset(source),
+                role=role,
+                memory_size=256,
+                timeout=Duration.seconds(timeout_seconds),
+                environment=environment,
+            )
+            return fn, role
+
+        table_env = {
+            "BUDGETS_TABLE": data_stack.budgets.table_name,
+            "RESERVATIONS_TABLE": data_stack.reservations.table_name,
+            "ALERTS_TABLE": data_stack.alerts.table_name,
+            "EVENT_BUS_NAME": self.event_bus.event_bus_name,
+        }
+        reservations_arn = data_stack.reservations.table_arn
+        index_arn = f"{reservations_arn}/index/status-expiry-index"
+        alerts_arn = data_stack.alerts.table_arn
+        budgets_arn = data_stack.budgets.table_arn
+
+        self.reaper, self.reaper_role = function(
+            "reaper",
+            "reaper_handler",
+            [],
+            [],
+            {
+                **table_env,
+                "WORKFLOW_STATE_MACHINE_ARN": machine_arn,
+                "PROVISIONER_ROLE_ARN": provisioner_role_arn,
+            },
+            timeout_seconds=30,
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
+                resources=[reservations_arn, budgets_arn],
+            )
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:Query"], resources=[reservations_arn, index_arn])
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["sts:AssumeRole"], resources=[provisioner_role_arn])
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["states:StartExecution", "states:ListExecutions"], resources=[machine_arn])
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["states:DescribeExecution"], resources=[execution_arn])
+        )
+        self.reaper_role.add_to_policy(
+            iam.PolicyStatement(actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn])
+        )
+
+        self.state_listener, self.state_listener_role = function(
+            "state_listener",
+            "state_change_handler",
+            [],
+            [],
+            table_env,
+        )
+        self.state_listener_role.add_to_policy(
+            iam.PolicyStatement(actions=["ec2:DescribeInstances"], resources=["*"])
+        )
+        self.state_listener_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:GetItem", "dynamodb:UpdateItem"], resources=[reservations_arn])
+        )
+        self.state_listener_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
+        )
+        self.bypass_detector, self.bypass_detector_role = function(
+            "bypass_detector",
+            "bypass_handler",
+            ["dynamodb:PutItem"],
+            [alerts_arn],
+            {**table_env, "PROVISIONER_ROLE_ARN": provisioner_role_arn},
+        )
+        self.orphan_auditor, self.orphan_auditor_role = function(
+            "orphan_auditor",
+            "orphan_audit_handler",
+            [],
+            [],
+            table_env,
+            timeout_seconds=30,
+        )
+        self.orphan_auditor_role.add_to_policy(
+            iam.PolicyStatement(actions=["ec2:DescribeInstances", "ec2:DescribeVolumes"], resources=["*"])
+        )
+        self.orphan_auditor_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[reservations_arn])
+        )
+        self.orphan_auditor_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
+        )
+
+        schedule_trust = iam.ServicePrincipal(
+            "scheduler.amazonaws.com",
+            conditions={
+                "StringEquals": {"aws:SourceAccount": self.account},
+                "ArnLike": {
+                    "aws:SourceArn": self.schedule_group.attr_arn,
+                },
+            },
+        )
+        self.scheduler_role = iam.Role(
+            self,
+            "ExpiryScheduleTargetRole",
+            role_name="spendctl-dev-m7-scheduler-target-role",
+            assumed_by=schedule_trust,
+        )
+        self.scheduler_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"], resources=[self.reaper.function_arn]
+            )
+        )
+
+        events.Rule(
+            self,
+            "LifecycleSafetySweeper",
+            rule_name="spendctl-dev-lifecycle-sweeper",
+            schedule=events.Schedule.rate(Duration.minutes(5)),
+            targets=[
+                event_targets.LambdaFunction(
+                    self.reaper,
+                    event=events.RuleTargetInput.from_object({"operation": "sweep"}),
+                )
+            ],
+        )
+        events.Rule(
+            self,
+            "InstanceStateChangeListener",
+            rule_name="spendctl-dev-instance-state-listener",
+            event_pattern=events.EventPattern(
+                source=["aws.ec2"],
+                detail_type=["EC2 Instance State-change Notification"],
+            ),
+            targets=[event_targets.LambdaFunction(self.state_listener)],
+        )
+        events.Rule(
+            self,
+            "RunInstancesBypassDetector",
+            rule_name="spendctl-dev-runinstances-bypass-detector",
+            event_pattern=events.EventPattern(
+                source=["aws.ec2"],
+                detail_type=["AWS API Call via CloudTrail"],
+                detail={"eventSource": ["ec2.amazonaws.com"], "eventName": ["RunInstances"]},
+            ),
+            targets=[event_targets.LambdaFunction(self.bypass_detector)],
+        )
+        events.Rule(
+            self,
+            "DailyOrphanAudit",
+            rule_name="spendctl-dev-daily-orphan-audit",
+            schedule=events.Schedule.rate(Duration.days(1)),
+            targets=[event_targets.LambdaFunction(self.orphan_auditor)],
+        )
+        CfnOutput(self, "EventBusName", value=self.event_bus.event_bus_name)
+        CfnOutput(self, "ReaperArn", value=self.reaper.function_arn)
 
 
 class BillingStack(Stack):

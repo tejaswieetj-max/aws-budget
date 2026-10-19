@@ -1057,6 +1057,171 @@ class DynamoLedger:
             "last_evaluated_key": _decode_item(response.get("LastEvaluatedKey")),
         }
 
+    def list_expired_active(
+        self, *, now: str | None = None, limit: int = 100, start_key: dict | None = None
+    ) -> dict:
+        """Query only ACTIVE reservations whose indexed expiry is due."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        response = self.db.query(
+            TableName=self.reservations,
+            IndexName="status-expiry-index",
+            KeyConditionExpression="#state = :active AND expires_at <= :now",
+            FilterExpression="record_type = :reservation",
+            ExpressionAttributeNames={"#state": "status"},
+            ExpressionAttributeValues={
+                ":active": _encode("ACTIVE"),
+                ":now": _encode(now or _now()),
+                ":reservation": _encode("RESERVATION"),
+            },
+            Limit=limit,
+            ScanIndexForward=True,
+            **({"ExclusiveStartKey": _key(start_key)} if start_key else {}),
+        )
+        return {
+            "items": [_decode_item(item) for item in response.get("Items", [])],
+            "last_evaluated_key": _decode_item(response.get("LastEvaluatedKey")),
+        }
+
+    def record_lifecycle_cleanup(
+        self,
+        reservation_id: str,
+        *,
+        cleanup_state: str,
+        terminated_at: str | None = None,
+    ) -> dict:
+        """Persist monotonic cleanup evidence for a cancelled/expired reservation."""
+        ranks = {"UNKNOWN": 0, "PENDING": 1, "COMPLETE": 2}
+        if cleanup_state not in ranks:
+            raise ValueError("cleanup_state must be UNKNOWN, PENDING, or COMPLETE")
+        reservation = self.get_reservation(reservation_id)
+        if reservation["status"] not in {"CANCELLED", "EXPIRED"}:
+            raise InvalidTransition("cleanup evidence requires a cancelled or expired reservation")
+        current = reservation.get("workflow_cleanup_state")
+        if current in ranks and ranks[current] >= ranks[cleanup_state]:
+            fields_match = terminated_at is None or reservation.get("terminated_at") == terminated_at
+            if fields_match or reservation.get("terminated_at"):
+                return {"reservation": reservation, "replayed": True}
+        names = {"#state": "status"}
+        values = {
+            ":expired": _encode("EXPIRED"),
+            ":cancelled": _encode("CANCELLED"),
+            ":target": _encode(cleanup_state),
+            ":now": _encode(_now()),
+        }
+        assignments = ["workflow_cleanup_state = :target", "updated_at = :now"]
+        if terminated_at is not None:
+            assignments.append("terminated_at = if_not_exists(terminated_at, :terminated_at)")
+            values[":terminated_at"] = _encode(terminated_at)
+        condition = "#state IN (:expired, :cancelled)"
+        if current is None:
+            condition += " AND attribute_not_exists(workflow_cleanup_state)"
+        else:
+            condition += " AND workflow_cleanup_state = :current"
+            values[":current"] = _encode(current)
+        try:
+            self.db.update_item(
+                TableName=self.reservations,
+                Key=_key(_reservation_key(reservation_id)),
+                UpdateExpression="SET " + ", ".join(assignments),
+                ConditionExpression=condition,
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as error:
+            if _error_code(error) == "ConditionalCheckFailedException":
+                latest = self.get_reservation(reservation_id)
+                if latest.get("workflow_cleanup_state") == cleanup_state and (
+                    terminated_at is None or latest.get("terminated_at")
+                ):
+                    return {"reservation": latest, "replayed": True}
+                raise InvalidTransition("lifecycle cleanup evidence changed concurrently") from error
+            if _ambiguous_client_error(error):
+                return self._resolve_lifecycle_cleanup_ambiguous(
+                    reservation_id, cleanup_state, terminated_at, error
+                )
+            raise
+        except _TRANSPORT_ERRORS as error:
+            return self._resolve_lifecycle_cleanup_ambiguous(
+                reservation_id, cleanup_state, terminated_at, error
+            )
+        return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
+    def record_instance_state(
+        self, reservation_id: str, *, instance_id: str, state: str, occurred_at: str
+    ) -> dict:
+        """Record a state-change event only for the instance durably bound to this reservation."""
+        if state not in {"pending", "running", "stopping", "stopped", "shutting-down", "terminated"}:
+            raise ValueError("unsupported EC2 instance state")
+        reservation = self.get_reservation(reservation_id)
+        if reservation.get("instance_id") != instance_id:
+            raise ReservationConflict("state event instance does not match reservation")
+        prior_time = reservation.get("instance_state_at")
+        if prior_time and prior_time > occurred_at:
+            return {"reservation": reservation, "replayed": True, "stale_event": True}
+        fields = {"instance_state": state, "instance_state_at": occurred_at, "updated_at": _now()}
+        if state == "terminated":
+            fields["terminated_at"] = reservation.get("terminated_at") or occurred_at
+        elif state == "stopped":
+            fields["stopped_at"] = reservation.get("stopped_at") or occurred_at
+        assignments = []
+        values = {":reservation_id": _encode(reservation_id), ":instance_id": _encode(instance_id)}
+        for index, (field, value) in enumerate(fields.items()):
+            name = f":v{index}"
+            assignments.append(f"{field} = {name}")
+            values[name] = _encode(value)
+        try:
+            self.db.update_item(
+                TableName=self.reservations,
+                Key=_key(_reservation_key(reservation_id)),
+                UpdateExpression="SET " + ", ".join(assignments),
+                ConditionExpression=(
+                    "reservation_id = :reservation_id AND instance_id = :instance_id "
+                    "AND #state IN (:active, :cancelled, :expired) "
+                    "AND (attribute_not_exists(instance_state_at) OR instance_state_at <= :occurred_at)"
+                ),
+                ExpressionAttributeNames={"#state": "status"},
+                ExpressionAttributeValues={
+                    **values,
+                    ":active": _encode("ACTIVE"),
+                    ":cancelled": _encode("CANCELLED"),
+                    ":expired": _encode("EXPIRED"),
+                    ":occurred_at": _encode(occurred_at),
+                },
+            )
+        except ClientError as error:
+            if _error_code(error) == "ConditionalCheckFailedException":
+                latest = self.get_reservation(reservation_id)
+                if latest.get("instance_state") == state and latest.get("instance_state_at") == occurred_at:
+                    return {"reservation": latest, "replayed": True}
+                if latest.get("instance_state_at", "") > occurred_at:
+                    return {"reservation": latest, "replayed": True, "stale_event": True}
+                raise InvalidTransition("instance state event is stale or reservation is ineligible") from error
+            raise
+        return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
+    def record_alert(self, *, alert_id: str, alert_type: str, details: dict) -> dict:
+        """Write an alert once using a stable caller-provided event key."""
+        item = {
+            "alert_id": alert_id,
+            "alert_type": alert_type,
+            "details": details,
+            "created_at": _now(),
+            "acknowledged": False,
+        }
+        try:
+            self.db.put_item(
+                TableName=self.alerts,
+                Item={key: _encode(value) for key, value in item.items()},
+                ConditionExpression="attribute_not_exists(alert_id)",
+            )
+        except ClientError as error:
+            if _error_code(error) == "ConditionalCheckFailedException":
+                existing = self._get_item(self.alerts, {"alert_id": alert_id})
+                return {"alert": existing or item, "replayed": True}
+            raise
+        return {"alert": item, "replayed": False}
+
     def _transition(
         self,
         reservation_id: str,
@@ -1106,6 +1271,21 @@ class DynamoLedger:
                 reservation_id, target, idempotent_states, error
             )
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
+    def _resolve_lifecycle_cleanup_ambiguous(
+        self, reservation_id: str, cleanup_state: str, terminated_at: str | None, error
+    ):
+        try:
+            current = self.get_reservation(reservation_id)
+        except (ReservationNotFound, *_TRANSPORT_ERRORS, ClientError):
+            current = None
+        if current and current.get("workflow_cleanup_state") == cleanup_state and (
+            terminated_at is None or current.get("terminated_at")
+        ):
+            return {"reservation": current, "replayed": True}
+        raise AmbiguousLedgerOutcome(
+            "lifecycle cleanup result is unknown; reconcile resources before acting again"
+        ) from error
 
     def _budget_update(self, reservation: dict, update: str, condition: str, values: dict) -> dict:
         expression_values = {key: _encode(value) for key, value in values.items()}

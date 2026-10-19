@@ -36,8 +36,10 @@ from .ledger import (
     BudgetAlreadyExists,
     BudgetNotFound,
     DynamoLedger,
+    InvalidTransition,
     ReservationNotFound,
 )
+from .lifecycle import lifecycle_event_id
 from .money import usd_to_micro
 from .pricing import CachedPricingProvider, InMemoryPriceCache, PriceList
 from .workflow_start import WorkflowStarter, WorkflowStartOutcomeUnknown
@@ -60,6 +62,7 @@ class ApiServices:
     samples_table: str
     alerts_table: str
     workflow: WorkflowStarter | None = None
+    lifecycle_dispatcher: Any = None
 
 
 class AuthenticationError(Exception):
@@ -87,7 +90,36 @@ def _get_services() -> ApiServices:
         _required_env("WORKFLOW_STATE_MACHINE_ARN"),
         ledger,
     )
-    return ApiServices(ledger, admission, db, budgets, reservations, samples, alerts, workflow)
+    lifecycle_dispatcher = LambdaLifecycleDispatcher(
+        boto3.client("lambda", region_name=region), _required_env("LIFECYCLE_REAPER_ARN")
+    )
+    return ApiServices(
+        ledger, admission, db, budgets, reservations, samples, alerts, workflow, lifecycle_dispatcher
+    )
+
+
+@dataclass(frozen=True)
+class LambdaLifecycleDispatcher:
+    client: Any
+    reaper_arn: str
+
+    def dispatch(self, reservation: dict, reason: str, event_id: str) -> None:
+        response = self.client.invoke(
+            FunctionName=self.reaper_arn,
+            InvocationType="Event",
+            Payload=json.dumps(
+                {
+                    "operation": "reap",
+                    "reason": reason,
+                    "reservation_id": reservation["reservation_id"],
+                    "team": reservation["team"],
+                    "event_id": event_id,
+                },
+                sort_keys=True,
+            ).encode(),
+        )
+        if response.get("StatusCode") != 202:
+            raise RuntimeError("lifecycle cleanup was not accepted")
 
 
 def _required_env(name: str) -> str:
@@ -235,6 +267,8 @@ def route_request(operation: str, event: dict, services: ApiServices) -> dict:
         return _error(503, "RETRYABLE_ERROR", str(error))
     except ReservationNotFound:
         return _error(404, "NOT_FOUND", "Request or reservation was not found")
+    except InvalidTransition as error:
+        return _error(409, "REQUEST_NOT_ACTIVE", str(error))
     except BudgetNotFound:
         return _error(404, "NOT_FOUND", "Budget was not found")
     except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError) as error:
@@ -298,13 +332,29 @@ def _get_request(event: dict, identity: VerifiedIdentity, services: ApiServices)
 
 
 def _cancel_request(event: dict, identity: VerifiedIdentity, services: ApiServices) -> dict:
-    reservation = services.ledger.get_reservation(_path_parameter(event, "id"))
+    reservation_id = _path_parameter(event, "id")
+    reservation = services.ledger.get_reservation(reservation_id)
     if reservation.get("team") != identity.team:
         raise UnauthorizedTeam("request belongs to another team")
-    return _error(
-        501,
-        "CANCELLATION_UNSUPPORTED",
-        "Cancellation is unavailable until lifecycle cleanup is implemented",
+    if reservation["status"] == "ACTIVE":
+        reservation = services.ledger.cancel_active(reservation_id)["reservation"]
+    elif reservation["status"] not in {"CANCELLED", "EXPIRED"}:
+        raise InvalidTransition(
+            f"cannot cancel request in {reservation['status']}; only active requests can be cancelled"
+        )
+    if services.lifecycle_dispatcher is None:
+        raise RuntimeError("lifecycle reaper is not configured")
+    reason = "expiry" if reservation["status"] == "EXPIRED" else "cancel"
+    services.lifecycle_dispatcher.dispatch(
+        reservation, reason, lifecycle_event_id(reservation, reason)
+    )
+    return _response(
+        202,
+        {
+            "request": reservation,
+            "cancellation_requested": reservation["status"] == "CANCELLED",
+            "cleanup_state": reservation.get("workflow_cleanup_state", "PENDING"),
+        },
     )
 
 

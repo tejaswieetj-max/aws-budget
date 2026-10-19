@@ -22,16 +22,19 @@ env = Environment(
 )
 identity = IdentityStack(app, "IdentityStack", env=env)
 data = DataStack(app, "DataStack", env=env)
-orchestration = OrchestrationStack(app, "OrchestrationStack", data_stack=data, env=env)
+lifecycle = LifecycleStack(app, "LifecycleStack", data_stack=data, env=env)
+orchestration = OrchestrationStack(
+    app, "OrchestrationStack", data_stack=data, lifecycle_stack=lifecycle, env=env
+)
 api = ApiStack(
     app,
     "ApiStack",
     user_pool=identity.pool,
     data_stack=data,
     state_machine_arn=orchestration.state_machine_arn,
+    lifecycle_reaper_arn=lifecycle.reaper.function_arn,
     env=env,
 )
-lifecycle = LifecycleStack(app, "LifecycleStack", env=env)
 billing = BillingStack(app, "BillingStack", env=env)
 web = WebStack(app, "WebStack", env=env)
 observability = ObservabilityStack(app, "ObservabilityStack", env=env)
@@ -39,4 +42,5 @@ for stack in [identity, data, api, orchestration, lifecycle, billing, web, obser
     stack.add_dependency(data) if stack is not data else None
 api.add_dependency(identity)
 api.add_dependency(orchestration)
+orchestration.add_dependency(lifecycle)
 app.synth()

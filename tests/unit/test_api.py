@@ -70,6 +70,14 @@ class FakeStepFunctions:
         return self.description
 
 
+class FakeLifecycleDispatcher:
+    def __init__(self):
+        self.calls = []
+
+    def dispatch(self, reservation, reason, event_id):
+        self.calls.append((reservation["reservation_id"], reason, event_id))
+
+
 @pytest.fixture
 def services():
     with mock_aws():
@@ -145,7 +153,15 @@ def services():
             FakeStepFunctions(), "arn:aws:states:ap-south-1:123456789012:stateMachine:sm", ledger
         )
         yield ApiServices(
-            ledger, admission, db, "Budgets", "Reservations", "CostSamples", "Alerts", workflow
+            ledger,
+            admission,
+            db,
+            "Budgets",
+            "Reservations",
+            "CostSamples",
+            "Alerts",
+            workflow,
+            FakeLifecycleDispatcher(),
         )
 
 
@@ -365,12 +381,29 @@ def test_request_read_not_found_and_cross_team_isolation(services):
     assert status == 403 and denied["error"]["code"] == "POLICY_DENIED"
 
 
-def test_cancel_is_not_supported_and_never_releases_reservation(services):
+def test_cancel_requests_idempotent_lifecycle_cleanup_without_releasing_reservation(services):
     created = services.admission.admit(
         REQUEST,
         identity=VerifiedIdentity("alpha", "user-1"),
         period=PERIOD,
         idempotency_key="cancel-test",
+    )
+    services.ledger.set_workflow_start_state(
+        created["reservation_id"],
+        "STARTING",
+        execution_name="exec-cancel-test",
+    )
+    services.ledger.set_workflow_start_state(
+        created["reservation_id"],
+        "STARTED",
+        execution_name="exec-cancel-test",
+        execution_arn="arn:aws:states:ap-south-1:123:execution:sm:cancel",
+    )
+    services.ledger.activate(
+        created["reservation_id"],
+        instance_id="i-cancel",
+        volume_ids=["vol-cancel"],
+        execution_arn="arn:aws:states:ap-south-1:123:execution:sm:cancel",
     )
     status, body = unpack(
         route_request(
@@ -382,9 +415,53 @@ def test_cancel_is_not_supported_and_never_releases_reservation(services):
             services,
         )
     )
-    assert status == 501
-    assert body["error"]["code"] == "CANCELLATION_UNSUPPORTED"
+    assert status == 202
+    assert body["cancellation_requested"] is True
+    assert body["cleanup_state"] == "PENDING"
+    reservation = services.ledger.get_reservation(created["reservation_id"])
+    assert reservation["status"] == "CANCELLED"
+    assert services.ledger.get_budget("alpha", PERIOD)["reserved_micro"] == reservation["reserved_micro"]
+    first_event = services.lifecycle_dispatcher.calls[0]
+    status, retry = unpack(
+        route_request(
+            "cancel_request",
+            event(
+                claims=claims(groups=["developers"]),
+                path={"id": created["reservation_id"]},
+            ),
+            services,
+        )
+    )
+    assert status == 202 and retry["request"]["status"] == "CANCELLED"
+    assert services.lifecycle_dispatcher.calls[1] == first_event
+
+
+def test_cancel_rejects_held_unknown_start_and_preserves_hold(services):
+    created = services.admission.admit(
+        REQUEST,
+        identity=VerifiedIdentity("alpha", "user-1"),
+        period=PERIOD,
+        idempotency_key="cancel-held-unknown",
+    )
+    services.ledger.set_workflow_start_state(
+        created["reservation_id"], "STARTING", execution_name="unknown-start"
+    )
+    services.ledger.set_workflow_start_state(
+        created["reservation_id"], "UNKNOWN", execution_name="unknown-start"
+    )
+    status, body = unpack(
+        route_request(
+            "cancel_request",
+            event(
+                claims=claims(groups=["developers"]),
+                path={"id": created["reservation_id"]},
+            ),
+            services,
+        )
+    )
+    assert status == 409 and body["error"]["code"] == "REQUEST_NOT_ACTIVE"
     assert services.ledger.get_reservation(created["reservation_id"])["status"] == "HELD"
+    assert services.lifecycle_dispatcher.calls == []
 
 
 def test_reservation_list_defaults_to_claim_team_and_denies_other_team(services):

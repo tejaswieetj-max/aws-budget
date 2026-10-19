@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 APPROVED_INSTANCE_TYPES = {"t3.micro", "t3.small"}
 REGION = "ap-south-1"
 MANAGED_BY = "spend-controller"
@@ -13,6 +15,10 @@ PROJECT_TAGS = {"project": "spendctl", "env": "dev"}
 
 class ProvisioningInputError(ValueError):
     """The reserved launch payload or required network configuration is invalid."""
+
+
+class OwnershipVerificationError(RuntimeError):
+    """A discovered resource could not be proven to belong to this reservation."""
 
 
 def launch_instance(
@@ -130,6 +136,7 @@ def cleanup_reservation(event: dict, *, ec2: Any) -> dict:
         {"Name": "tag:reservation-id", "Values": [reservation_id]},
         {"Name": "tag:team", "Values": [team]},
         {"Name": "tag:project", "Values": [PROJECT_TAGS["project"]]},
+        {"Name": "tag:env", "Values": [PROJECT_TAGS["env"]]},
     ]
     described = ec2.describe_instances(Filters=filters)
     instances = [
@@ -162,6 +169,150 @@ def cleanup_reservation(event: dict, *, ec2: Any) -> dict:
         "instance_ids": sorted(instance["InstanceId"] for instance in instances),
         "volume_ids": sorted(volume["VolumeId"] for volume in volumes),
     }
+
+
+def terminate_expected_resources(event: dict, *, ec2: Any) -> dict:
+    """Terminate only the ledger-bound instance and delete only its tagged volumes."""
+    reservation_id, team = _reservation_identity(event)
+    instance_id = event.get("instance_id")
+    if not isinstance(instance_id, str) or not instance_id.startswith("i-"):
+        return {"cleanup_state": "UNKNOWN", "reason": "ledger instance ID is missing"}
+
+    response = ec2.describe_instances(InstanceIds=[instance_id])
+    instances = [
+        instance
+        for row in response.get("Reservations", [])
+        for instance in row.get("Instances", [])
+    ]
+    if not instances:
+        if event.get("instance_state") == "terminated" and event.get("terminated_at"):
+            instance_terminated = True
+        else:
+            return {"cleanup_state": "UNKNOWN", "reason": "instance state is not observable"}
+    else:
+        instance = instances[0]
+        _verify_ownership(instance.get("Tags", []), reservation_id, team)
+        state = instance.get("State", {}).get("Name", "unknown")
+        if state not in {"terminated", "shutting-down"}:
+            ec2.terminate_instances(InstanceIds=[instance_id])
+            return {"cleanup_state": "PENDING", "instance_id": instance_id}
+        instance_terminated = state == "terminated"
+        if not instance_terminated:
+            return {"cleanup_state": "PENDING", "instance_id": instance_id}
+
+    volume_ids = event.get("volume_ids") or []
+    for volume_id in sorted(set(volume_ids)):
+        if not isinstance(volume_id, str) or not volume_id.startswith("vol-"):
+            raise OwnershipVerificationError("ledger contains an invalid volume ID")
+        try:
+            volume_response = ec2.describe_volumes(VolumeIds=[volume_id])
+        except ClientError as error:
+            code = getattr(error, "response", {}).get("Error", {}).get("Code")
+            if code == "InvalidVolume.NotFound":
+                continue
+            raise
+        volumes = volume_response.get("Volumes", [])
+        if not volumes:
+            return {"cleanup_state": "UNKNOWN", "reason": "volume state is not observable"}
+        volume = volumes[0]
+        _verify_ownership(volume.get("Tags", []), reservation_id, team)
+        attachments = volume.get("Attachments", [])
+        if any(attachment.get("InstanceId") != instance_id for attachment in attachments):
+            raise OwnershipVerificationError("volume is attached to an unexpected instance")
+        if volume.get("State") == "available":
+            ec2.delete_volume(VolumeId=volume_id)
+            return {"cleanup_state": "PENDING", "instance_id": instance_id}
+        if volume.get("State") != "deleted":
+            return {"cleanup_state": "PENDING", "instance_id": instance_id}
+
+    return {"cleanup_state": "COMPLETE", "instance_id": instance_id}
+
+
+def inspect_expected_cleanup(event: dict, *, ec2: Any) -> dict:
+    """Read-only cleanup plan used by lifecycle dry-run requests."""
+    reservation_id, team = _reservation_identity(event)
+    instance_id = event.get("instance_id")
+    if not isinstance(instance_id, str) or not instance_id.startswith("i-"):
+        return {"state": "UNKNOWN", "reason": "ledger instance ID is missing"}
+    response = ec2.describe_instances(InstanceIds=[instance_id])
+    instances = [i for group in response.get("Reservations", []) for i in group.get("Instances", [])]
+    if not instances:
+        if event.get("instance_state") != "terminated" or not event.get("terminated_at"):
+            return {"state": "UNKNOWN", "reason": "instance state is not observable"}
+        instance_state = "terminated"
+    else:
+        instance = instances[0]
+        _verify_ownership(instance.get("Tags", []), reservation_id, team)
+        instance_state = instance.get("State", {}).get("Name", "unknown")
+    to_delete = []
+    for volume_id in sorted(set(event.get("volume_ids") or [])):
+        try:
+            volume_response = ec2.describe_volumes(VolumeIds=[volume_id])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "InvalidVolume.NotFound":
+                continue
+            raise
+        volumes = volume_response.get("Volumes", [])
+        if not volumes:
+            return {"state": "UNKNOWN", "reason": "volume state is not observable"}
+        volume = volumes[0]
+        _verify_ownership(volume.get("Tags", []), reservation_id, team)
+        if any(a.get("InstanceId") != instance_id for a in volume.get("Attachments", [])):
+            raise OwnershipVerificationError("volume is attached to an unexpected instance")
+        if volume.get("State") == "available":
+            to_delete.append(volume_id)
+    return {
+        "state": "DRY_RUN",
+        "instance_id": instance_id,
+        "instance_state": instance_state,
+        "would_terminate": instance_state not in {"terminated", "shutting-down"},
+        "would_delete_volumes": to_delete,
+    }
+
+
+def find_reservation_resources(event: dict, *, ec2: Any) -> dict:
+    """Read-only tag-scoped lookup for uncertain-start reconciliation."""
+    reservation_id, team = _reservation_identity(event)
+    filters = [
+        {"Name": "tag:managed-by", "Values": [MANAGED_BY]},
+        {"Name": "tag:reservation-id", "Values": [reservation_id]},
+        {"Name": "tag:team", "Values": [team]},
+        {"Name": "tag:project", "Values": [PROJECT_TAGS["project"]]},
+        {"Name": "tag:env", "Values": [PROJECT_TAGS["env"]]},
+    ]
+    instances = _describe_pages(ec2.describe_instances, "Reservations", filters=filters)
+    volumes = _describe_pages(ec2.describe_volumes, "Volumes", filters=filters)
+    flattened_instances = [
+        instance for row in instances for instance in row.get("Instances", [])
+    ]
+    return {"instances": flattened_instances, "volumes": volumes}
+
+
+def _describe_pages(call, result_key: str, **kwargs) -> list[dict]:
+    output = []
+    token = None
+    while True:
+        request = dict(kwargs)
+        if token:
+            request["NextToken"] = token
+        page = call(**request)
+        output.extend(page.get(result_key, []))
+        token = page.get("NextToken")
+        if not token:
+            return output
+
+
+def _verify_ownership(tags: list[dict], reservation_id: str, team: str) -> None:
+    values = {tag.get("Key"): tag.get("Value") for tag in tags}
+    expected = {
+        "managed-by": MANAGED_BY,
+        "reservation-id": reservation_id,
+        "team": team,
+        "project": PROJECT_TAGS["project"],
+        "env": PROJECT_TAGS["env"],
+    }
+    if any(values.get(key) != value for key, value in expected.items()):
+        raise OwnershipVerificationError("resource ownership tags do not match reservation")
 
 
 def provision_handler(event, context):
