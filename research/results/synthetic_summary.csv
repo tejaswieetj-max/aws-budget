@@ -1,0 +1,5 @@
+policy,requests,budget_overrun_frequency,p95_overrun_severity,p99_overrun_severity,average_reserve_micro,valid_admission_rate,rejection_rate,reservation_latency_ms,oversubscription_count,duplicate_reservations,orphaned_holds,calibration_lag_sensitivity,attribution_rate,cleanup_success,metric_note
+fixed_1.10,2000,0.361,0.25333125751136254,0.46282965068624987,1100000,1,0,,,,,,,,cloud-dependent metrics are null in simulation; see methodology
+rolling_quantile,2000,0.073,0.03877737215567491,0.2257744168589639,1371003.6575,1,0,,,,,,,,cloud-dependent metrics are null in simulation; see methodology
+split_conformal,2000,0.042,0.0,0.14386779504907715,1406730,1,0,,,,,,,,cloud-dependent metrics are null in simulation; see methodology
+adaptive,2000,0.0645,0.026865846992621695,0.22263834733424345,1390102.079,1,0,,,,,,,,cloud-dependent metrics are null in simulation; see methodology

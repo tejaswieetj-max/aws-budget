@@ -1,0 +1,7 @@
+# Research methodology and limits
+
+`research/run.py` is a seeded synthetic simulation and labels every result synthetic. It compares fixed 1.10, rolling empirical p95, a frozen early split calibration quantile, and the adaptive conformal-style update. The non-atomic concurrency baseline is intended as an isolated experiment only and must never be enabled for ordinary traffic. Synthetic output is not a claim about AWS prices or billing.
+
+The runner produces raw request-level outcomes, policy summaries, and a plot. It records budget-overrun frequency/severity, reserve size, and admission/rejection under the configured synthetic budget. It does not yet measure reservation latency, oversubscription, duplicate reservations, orphaned holds, calibration-lag sensitivity, attribution, or cleanup; those summary columns are deliberately blank pending a reproducible experiment with the required system instrumentation. Calibration-lag, concurrency, and fault-injection experiments still need implementation. Split conformal is included as a frozen-split comparator; its guarantee requires exchangeable calibration/evaluation data and a prespecified procedure, assumptions not established by the simulation. Falsification: reject any policy claim if its predeclared evaluation undercoverage bound is exceeded on a held-out, attributed, sufficiently sized dataset, or if duplicate settlement processing changes outcomes.
+
+No AWS billing export, live price snapshot, deployment, or live result is included.

@@ -1,0 +1,13 @@
+{
+  "seed": 20261019,
+  "requests": 2000,
+  "teams": 20,
+  "budget_micro": 250000000,
+  "gamma": 0.02,
+  "target_alpha": 0.05,
+  "reserve_bounds": [1.0, 2.0],
+  "fixed_multiplier": 1.1,
+  "warmup": 100,
+  "output_dir": "research/results",
+  "billing_data": "synthetic_only"
+}
