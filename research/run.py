@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 from spendctl.calibration import MarginPolicies, Sample
+from evaluate import atomic_vs_naive_experiment, calibration_lag_sensitivity
 
 
 def main():
@@ -117,6 +118,26 @@ def main():
         w = csv.DictWriter(f, fieldnames=summaries[0].keys())
         w.writeheader()
         w.writerows(summaries)
+    concurrency = atomic_vs_naive_experiment(
+        seed=cfg["seed"], concurrency=cfg.get("concurrency_levels", [1, 2, 4, 8, 16, 32]),
+        request_count=cfg.get("concurrency_requests", 200), budget_micro=cfg["budget_micro"],
+    )
+    lag = calibration_lag_sensitivity(
+        seed=cfg["seed"], requests=cfg.get("lag_requests", 1000),
+        lags=cfg.get("calibration_lags", [0, 1, 7, 30]),
+    )
+    (out / "synthetic_concurrency.json").write_text(
+        json.dumps({"classification": "SYNTHETIC_LOCAL_SCHEDULE_MODEL", "seed": cfg["seed"], "results": concurrency}, indent=2) + "\n"
+    )
+    (out / "synthetic_calibration_lag.json").write_text(
+        json.dumps({"classification": "SYNTHETIC_NOT_AWS_BILLING", "seed": cfg["seed"], "results": lag}, indent=2) + "\n"
+    )
+    with (out / "synthetic_concurrency.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=concurrency[0].keys())
+        writer.writeheader(); writer.writerows(concurrency)
+    with (out / "synthetic_calibration_lag.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=lag[0].keys())
+        writer.writeheader(); writer.writerows(lag)
     colors = {
         "fixed_1.10": "#2563eb",
         "rolling_quantile": "#dc2626",

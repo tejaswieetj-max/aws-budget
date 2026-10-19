@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import statistics
+import sys
 from dataclasses import asdict, dataclass
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
     if not isinstance(reservations, list) or not isinstance(audits, list):
         raise ValueError("reservations and billing_audits must be arrays")
     by_id: dict[str, dict] = {}
+    duplicate_reservations: set[str] = set()
     excluded: list[dict] = []
     for reservation in reservations:
         if not isinstance(reservation, dict) or not reservation.get("reservation_id"):
@@ -54,25 +57,27 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
         if reservation_id in by_id:
             excluded.append({"reservation_id": reservation_id, "reason": "duplicate_reservation"})
             by_id.pop(reservation_id, None)
+            duplicate_reservations.add(reservation_id)
+            continue
+        if reservation_id in duplicate_reservations:
             continue
         by_id[reservation_id] = reservation
 
-    latest: dict[str, dict] = {}
+    audit_groups: dict[str, list[dict]] = {}
     for audit in audits:
         if not isinstance(audit, dict) or not audit.get("reservation_id"):
             excluded.append({"reason": "audit_missing_reservation_id"})
             continue
         rid = str(audit["reservation_id"])
-        if rid in latest:
-            prev_order = str(latest[rid].get("source_revision_order", ""))
-            next_order = str(audit.get("source_revision_order", ""))
-            if next_order == prev_order:
-                excluded.append({"reservation_id": rid, "reason": "duplicate_or_conflicting_revision"})
-                latest.pop(rid, None)
-                continue
-            if next_order < prev_order:
-                continue
-        latest[rid] = audit
+        audit_groups.setdefault(rid, []).append(audit)
+
+    latest: dict[str, dict] = {}
+    for rid, rows in audit_groups.items():
+        orders = [str(row.get("source_revision_order", "")) for row in rows]
+        if "" in orders or len(orders) != len(set(orders)):
+            excluded.append({"reservation_id": rid, "reason": "duplicate_or_missing_revision_order"})
+            continue
+        latest[rid] = max(rows, key=lambda row: str(row["source_revision_order"]))
 
     observations: list[Observation] = []
     for rid, audit in sorted(latest.items()):
@@ -89,21 +94,36 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
         try:
             actual = _int(audit.get("new_actual_micro"), "new_actual_micro", nonnegative=True)
             reserved = _int(reservation.get("reserved_micro"), "reserved_micro", nonnegative=True)
-            compute = _int(reservation.get("compute_micro", 0), "compute_micro", nonnegative=True)
-            storage = _int(reservation.get("storage_micro", 0), "storage_micro", nonnegative=True)
-            margin = _decimal(reservation.get("reserve_margin", reservation.get("reserve_multiplier", "1.10")))
+            compute = _int(reservation.get("compute_micro"), "compute_micro", nonnegative=True)
+            storage = _int(reservation.get("storage_micro"), "storage_micro", nonnegative=True)
+            margin = _decimal(reservation.get("margin", reservation.get("reserve_margin", reservation.get("reserve_multiplier", "1.10"))))
             ebs_gb = _int(reservation.get("resource", {}).get("ebs_gb", reservation.get("ebs_gb", 0)), "ebs_gb", nonnegative=True)
         except (ValueError, TypeError, ArithmeticError) as error:
             excluded.append({"reservation_id": rid, "reason": f"invalid_financial_field:{error}"})
             continue
         resource = reservation.get("resource") or {}
+        instance_type = str(resource.get("instance_type", reservation.get("instance_type", "unknown")))
+        region = str(reservation.get("region", "ap-south-1"))
+        runtime = _optional_int(reservation.get("planned_hours", reservation.get("duration_hours")))
+        if instance_type not in {"t3.micro", "t3.small"} or region != "ap-south-1" or not 1 <= ebs_gb <= 30:
+            excluded.append({"reservation_id": rid, "reason": "unsupported_resource_configuration"})
+            continue
+        if runtime is not None and not 1 <= runtime <= 24:
+            excluded.append({"reservation_id": rid, "reason": "unsupported_requested_runtime"})
+            continue
+        if margin <= 0:
+            excluded.append({"reservation_id": rid, "reason": "invalid_reserve_margin"})
+            continue
+        if not reservation.get("price_snapshot_id") or not reservation.get("price_fetched_at"):
+            excluded.append({"reservation_id": rid, "reason": "incomplete_price_provenance"})
+            continue
         observations.append(
             Observation(
                 reservation_id=rid,
-                instance_type=str(resource.get("instance_type", reservation.get("instance_type", "unknown"))),
-                region=str(reservation.get("region", "ap-south-1")),
+                instance_type=instance_type,
+                region=region,
                 ebs_gb=ebs_gb,
-                requested_runtime_hours=_optional_int(reservation.get("duration_hours")),
+                requested_runtime_hours=runtime,
                 actual_runtime_hours=_optional_decimal(reservation.get("actual_runtime_hours")),
                 estimated_compute_micro=compute,
                 estimated_storage_micro=storage,
@@ -121,7 +141,7 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
     missing_audit = sorted(set(by_id) - set(latest))
     excluded.extend({"reservation_id": rid, "reason": "no_billing_audit"} for rid in missing_audit)
     return {
-        "classification": "REAL_EXPORT" if provenance == "aws_export" else "UNVERIFIED_EXPORT",
+        "classification": "AWS_EXPORT_ASSERTED_UNVERIFIED" if provenance == "aws_export" else provenance.upper(),
         "observation_count": len(observations),
         "observations": [asdict(row) for row in observations],
         "exclusions": excluded,
@@ -165,6 +185,11 @@ def estimation_metrics(rows: list[Observation]) -> dict[str, Any]:
 
 
 def evaluate_margins(rows: list[Observation], candidates: list[Decimal]) -> dict[str, Any]:
+    ordered = sorted(rows, key=lambda row: (row.billing_period, row.reservation_id))
+    periods = {row.billing_period for row in ordered if row.billing_period}
+    holdout_available = len(ordered) >= 20 and len(periods) >= 2
+    holdout_start = int(len(ordered) * 0.8)
+    holdout = ordered[holdout_start:] if holdout_available else []
     output = []
     for margin in candidates:
         if margin <= 0:
@@ -172,6 +197,10 @@ def evaluate_margins(rows: list[Observation], candidates: list[Decimal]) -> dict
         reserves = [_ceil_micro(Decimal(r.estimated_compute_micro + r.estimated_storage_micro) * margin) for r in rows]
         deficits = [max(0, r.actual_micro - reserved) for r, reserved in zip(rows, reserves)]
         count = len(rows)
+        holdout_deficits = [
+            max(0, row.actual_micro - _ceil_micro(Decimal(row.estimated_compute_micro + row.estimated_storage_micro) * margin))
+            for row in holdout
+        ]
         output.append({
             "margin": str(margin), "sample_size": count,
             "total_reserved_micro": sum(reserves), "total_actual_micro": sum(r.actual_micro for r in rows),
@@ -179,7 +208,11 @@ def evaluate_margins(rows: list[Observation], candidates: list[Decimal]) -> dict
             "insufficient_count": sum(d > 0 for d in deficits),
             "insufficient_percent": (sum(d > 0 for d in deficits) * 100 / count) if count else None,
             "aggregate_deficit_micro": sum(deficits), "worst_deficit_micro": max(deficits, default=0),
-            "holdout": "exploratory_no_chronological_holdout" if count < 20 else "chronological_last_20_percent",
+            "holdout": "chronological_last_20_percent" if holdout_available else "exploratory_insufficient_chronological_data",
+            "holdout_sample_size": len(holdout),
+            "holdout_insufficient_count": sum(value > 0 for value in holdout_deficits),
+            "holdout_insufficient_percent": (sum(value > 0 for value in holdout_deficits) * 100 / len(holdout)) if holdout else None,
+            "holdout_worst_deficit_micro": max(holdout_deficits, default=0),
         })
     return {"candidate_margins": output, "limitations": [
         "recommendations only; production policy is unchanged",
@@ -222,13 +255,53 @@ def atomic_vs_naive_experiment(*, seed: int, concurrency: list[int], request_cou
             "atomic_accepted": sum(atomic), "atomic_denied": request_count - sum(atomic),
             "atomic_over_admission_micro": max(0, sum(amounts[i] for i, ok in enumerate(atomic) if ok) - budget_micro),
             "atomic_transaction_conflicts": conflicts,
+            "atomic_retries": 0,
+            "atomic_reservation_latency_ms": None,
             "naive_accepted": naive_accepted, "naive_denied": request_count - naive_accepted,
             "naive_over_admission_micro": max(0, naive_spend - budget_micro),
+            "naive_retries": 0,
+            "naive_reservation_latency_ms": None,
             "atomic_invariant_holds": not atomic_over and available >= 0,
             "naive_invariant_holds": naive_available >= 0,
             "latency_ms": None, "retries": None,
             "note": "deterministic local schedule model; not DynamoDB timing evidence",
         })
+    return reports
+
+
+def calibration_lag_sensitivity(*, seed: int, requests: int = 1000,
+                                 lags: list[int] | None = None) -> list[dict[str, Any]]:
+    """Measure adaptive reserve outcomes when feedback arrives after 0/1/7/30 rows."""
+    from spendctl.calibration import MarginPolicies, Sample
+    import math
+
+    delays = lags or [0, 1, 7, 30]
+    rng = random.Random(seed)
+    ratios = [Decimal(str(math.exp(rng.gauss(0.03 if i < requests // 2 else 0.10, 0.2))))
+              for i in range(requests)]
+    reports = []
+    for delay in delays:
+        if delay < 0:
+            raise ValueError("feedback lag must be nonnegative")
+        policy = MarginPolicies(gamma=0.02)
+        overrun = 0
+        reserve_sum = Decimal(0)
+        for index, ratio in enumerate(ratios):
+            multiplier = Decimal(str(policy.get("ec2:t3", "adaptive")))
+            reserve_sum += multiplier
+            overrun += int(ratio > multiplier)
+            feedback_index = index - delay
+            if feedback_index >= 0:
+                actual = int(1_000_000 * ratios[feedback_index])
+                policy.add_settlement(
+                    "ec2:t3",
+                    Sample(f"lag-{delay}-settle-{feedback_index}", float(ratios[feedback_index]),
+                           1_100_000, actual, 1_000_000, feedback_index),
+                )
+        reports.append({"feedback_lag_requests": delay, "requests": requests,
+                        "adaptive_overrun_frequency": overrun / requests,
+                        "average_reserve_multiplier": str(reserve_sum / requests),
+                        "seed": seed, "classification": "SYNTHETIC_NOT_AWS_BILLING"})
     return reports
 
 

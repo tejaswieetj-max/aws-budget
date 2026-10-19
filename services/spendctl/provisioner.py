@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
+
+from .observability import emit_emf, structured_log
 
 APPROVED_INSTANCE_TYPES = {"t3.micro", "t3.small"}
 REGION = "ap-south-1"
@@ -323,24 +325,35 @@ def provision_handler(event, context):
     region = event.get("region", REGION)
     if region != REGION:
         raise ProvisioningInputError("provisioning is restricted to ap-south-1")
-    credentials = _assume_provisioner_role(event, boto3)
-    ec2 = boto3.client("ec2", region_name=REGION, **credentials)
-    if op == "launch":
-        return launch_instance(
-            event,
-            ec2=ec2,
-            ami_id=os.environ.get("APPROVED_AMI_ID", ""),
-            private_subnet_id=os.environ.get("PRIVATE_SUBNET_ID", ""),
-            security_group_id=os.environ.get("SECURITY_GROUP_ID", ""),
-            failure_injection_enabled=os.environ.get("SPENDCTL_FAILURE_INJECTION_ENABLED")
-            == "true",
-            failure_injection_token=os.environ.get("SPENDCTL_FAILURE_INJECTION_TOKEN"),
-        )
-    if op == "poll":
-        return poll_instance(event["instance_id"], ec2=ec2)
-    if op == "cleanup":
-        return cleanup_reservation(event, ec2=ec2)
-    raise ProvisioningInputError("unsupported provisioning operation")
+    try:
+        credentials = _assume_provisioner_role(event, boto3)
+        ec2 = boto3.client("ec2", region_name=REGION, **credentials)
+        if op == "launch":
+            result = launch_instance(
+                event,
+                ec2=ec2,
+                ami_id=os.environ.get("APPROVED_AMI_ID", ""),
+                private_subnet_id=os.environ.get("PRIVATE_SUBNET_ID", ""),
+                security_group_id=os.environ.get("SECURITY_GROUP_ID", ""),
+                failure_injection_enabled=os.environ.get("SPENDCTL_FAILURE_INJECTION_ENABLED")
+                == "true",
+                failure_injection_token=os.environ.get("SPENDCTL_FAILURE_INJECTION_TOKEN"),
+            )
+            emit_emf("Spendctl/Workflow", {"EC2LaunchSuccesses": (1, "Count")}, dimensions={"result": "success"})
+            structured_log("M6", "ec2_launch", "success", reservation_id=event.get("reservation_id"),
+                           instance_id=result.get("instance_id"))
+            return result
+        if op == "poll":
+            return poll_instance(event["instance_id"], ec2=ec2)
+        if op == "cleanup":
+            return cleanup_reservation(event, ec2=ec2)
+        raise ProvisioningInputError("unsupported provisioning operation")
+    except (BotoCoreError, ClientError, TimeoutError, ConnectionError) as error:
+        if op == "launch":
+            emit_emf("Spendctl/Workflow", {"EC2LaunchFailures": (1, "Count")}, dimensions={"result": "failure"})
+        structured_log("M6", f"{op or 'unknown'}_provisioning", "failure",
+                       reservation_id=event.get("reservation_id"), error_category=type(error).__name__)
+        raise
 
 
 def _assume_provisioner_role(event: dict, boto3_module: Any) -> dict:

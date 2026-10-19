@@ -606,6 +606,7 @@ class OrchestrationStack(Stack):
                 "SPENDCTL_FAILURE_INJECTION_ENABLED": "false",
             },
         )
+        self.provisioner_function = provisioner
 
         reservations_arn = data_stack.reservations.table_arn
         activate = make_lambda(
@@ -622,6 +623,7 @@ class OrchestrationStack(Stack):
                 "EVENT_BUS_NAME": lifecycle_stack.event_bus.event_bus_name,
             },
         )
+        self.activate_function = activate
         schedule_arn = (
             f"arn:{self.partition}:scheduler:{self.region}:{self.account}:schedule/"
             f"{lifecycle_stack.schedule_group_name}/*"
@@ -665,6 +667,7 @@ class OrchestrationStack(Stack):
                 "ALERTS_TABLE": data_stack.alerts.table_name,
             },
         )
+        self.record_outcome_function = record_outcome
         record_outcome.role.add_to_policy(
             iam.PolicyStatement(
                 actions=["dynamodb:PutItem"], resources=[data_stack.alerts.table_arn]
@@ -1652,6 +1655,8 @@ class ObservabilityStack(Stack):
         workflow_success = custom("Spendctl/Workflow", "WorkflowStartSuccesses", dimension={"result": "success"})
         workflow_failure = custom("Spendctl/Workflow", "WorkflowStartFailures", dimension={"result": "failure"})
         workflow_unknown = custom("Spendctl/Workflow", "WorkflowUnknownOutcomes", dimension={"result": "unknown"})
+        ec2_launch_failures = custom("Spendctl/Workflow", "EC2LaunchFailures", dimension={"result": "failure"})
+        ec2_launch_successes = custom("Spendctl/Workflow", "EC2LaunchSuccesses", dimension={"result": "success"})
         cleanup_failure = custom("Spendctl/Lifecycle", "LifecycleCleanupFailures", dimension={"result": "failure"})
         unresolved = custom("Spendctl/Lifecycle", "ResourcesUnresolved", dimension={"operation": "cleanup"})
         billing_failure = custom("Spendctl/Billing", "BillingReconciliationFailures")
@@ -1660,22 +1665,28 @@ class ObservabilityStack(Stack):
         admission_success = custom("Spendctl/Admission", "AdmissionDecision", dimension={"result": "admitted"})
         admission_denied = custom("Spendctl/Admission", "AdmissionDecision", dimension={"result": "denied"})
         admission_latency = custom("Spendctl/Admission", "AdmissionLatencyMs", dimension={"result": "admitted"}, unit=cloudwatch.Unit.MILLISECONDS)
+        admission_replays = custom("Spendctl/Admission", "IdempotentReplays")
+        transaction_conflicts = custom("Spendctl/Admission", "TransactionConflicts")
+        budget_utilization = custom("Spendctl/Budget", "BudgetUtilizationPercent", unit=cloudwatch.Unit.PERCENT)
         price_hits = custom("Spendctl/Pricing", "PriceCacheHits", dimension={"result": "cache_hit"})
         price_misses = custom("Spendctl/Pricing", "PriceCacheMisses", dimension={"result": "cache_miss"})
         fallback = custom("Spendctl/Pricing", "FallbackPriceUsage", dimension={"result": "fallback"})
         api_5xx = api_stack.api.metric("5xx", period=period, statistic="Sum")
         api_latency = api_stack.api.metric("Latency", period=period, statistic="Average", unit=cloudwatch.Unit.MILLISECONDS)
         state_machine_failed = orchestration_stack.state_machine.metric_failed(period=period, statistic="Sum")
+        state_machine_succeeded = orchestration_stack.state_machine.metric_succeeded(period=period, statistic="Sum")
         lambda_errors = [fn.metric_errors(period=period, statistic="Sum") for fn in api_stack.api_functions.values()]
+        billing_lambda_errors = billing_stack.reconciler.metric_errors(period=period, statistic="Sum")
 
         dashboard = cloudwatch.Dashboard(self, "SpendctlOperationsDashboard",
                                          dashboard_name="spendctl-dev-operations")
         dashboard.add_widgets(
-            cloudwatch.GraphWidget(title="Admission decisions and latency", left=[admission_success, admission_denied], right=[admission_latency]),
-            cloudwatch.GraphWidget(title="Provisioning starts and executions", left=[workflow_success, workflow_failure, workflow_unknown, state_machine_failed]),
+            cloudwatch.GraphWidget(title="Admission decisions and latency", left=[admission_success, admission_denied, admission_replays, transaction_conflicts], right=[admission_latency]),
+            cloudwatch.GraphWidget(title="Provisioning starts and executions", left=[workflow_success, workflow_failure, workflow_unknown, ec2_launch_successes, ec2_launch_failures, state_machine_succeeded, state_machine_failed]),
             cloudwatch.GraphWidget(title="Cleanup and unresolved resources", left=[cleanup_failure, unresolved]),
             cloudwatch.GraphWidget(title="Ledger invariant violations", left=[invariant]),
-            cloudwatch.GraphWidget(title="Billing reconciliation health", left=[billing_processed, billing_failure, billing_attribution]),
+            cloudwatch.GraphWidget(title="Billing reconciliation health", left=[billing_processed, billing_failure, billing_attribution, billing_lambda_errors]),
+            cloudwatch.GraphWidget(title="Budget utilization threshold signals", left=[budget_utilization]),
             cloudwatch.GraphWidget(title="Pricing cache and fallback", left=[price_hits, price_misses, fallback]),
             cloudwatch.GraphWidget(title="API errors, latency and Lambda errors", left=[api_5xx, *lambda_errors], right=[api_latency]),
         )
@@ -1694,8 +1705,14 @@ class ObservabilityStack(Stack):
         self.provisioning_alarm = alarm("RepeatedProvisioningFailureAlarm", workflow_failure, 3)
         self.cleanup_alarm = alarm("RepeatedCleanupFailureAlarm", cleanup_failure, 2)
         self.unknown_workflow_alarm = alarm("UnresolvedWorkflowAlarm", workflow_unknown, 1)
+        self.ec2_launch_alarm = alarm("RepeatedEc2LaunchFailureAlarm", ec2_launch_failures, 2)
         self.billing_alarm = alarm("BillingReconciliationFailureAlarm", billing_failure, 1)
         self.api_alarm = alarm("HighApiErrorRateAlarm", api_5xx, 5)
+        self.budget_threshold_alarms = [
+            alarm(f"BudgetUtilization{threshold}PercentAlarm", budget_utilization, threshold,
+                  comparison=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD)
+            for threshold in (50, 80, 100)
+        ]
         self.dlq_alarm = alarm(
             "InvariantDeadLetterAlarm",
             lifecycle_stack.invariant_dlq.metric_approximate_number_of_messages_visible(period=period, statistic="Maximum"),
