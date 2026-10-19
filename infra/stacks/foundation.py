@@ -23,8 +23,22 @@ from constructs import Construct
 
 
 class IdentityStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs):
+    def __init__(
+        self, scope: Construct, construct_id: str, *, cloudfront_url: str | None = None, **kwargs
+    ):
         super().__init__(scope, construct_id, **kwargs)
+        domain_prefix = CfnParameter(
+            self,
+            "HostedUiDomainPrefix",
+            type="String",
+            description="Globally unique Cognito hosted UI domain prefix",
+        )
+        callback_urls = ["http://localhost:5173/callback"]
+        logout_urls = ["http://localhost:5173/"]
+        if cloudfront_url:
+            origin = cloudfront_url.rstrip("/")
+            callback_urls.append(f"{origin}/callback")
+            logout_urls.append(f"{origin}/")
         self.pool = cognito.UserPool(
             self,
             "Developers",
@@ -52,7 +66,8 @@ class IdentityStack(Stack):
             write_attributes=client_write_attributes,
             o_auth=cognito.OAuthSettings(
                 flows=cognito.OAuthFlows(authorization_code_grant=True),
-                callback_urls=["http://localhost:5173/callback"],
+                callback_urls=callback_urls,
+                logout_urls=logout_urls,
                 scopes=[
                     cognito.OAuthScope.OPENID,
                     cognito.OAuthScope.EMAIL,
@@ -60,7 +75,19 @@ class IdentityStack(Stack):
                 ],
             ),
         )
+        self.domain = self.pool.add_domain(
+            "HostedUiDomain",
+            cognito_domain=cognito.CognitoDomainOptions(
+                domain_prefix=domain_prefix.value_as_string
+            ),
+        )
         CfnOutput(self, "UserPoolId", value=self.pool.user_pool_id)
+        CfnOutput(self, "UserPoolClientId", value=self.client.user_pool_client_id)
+        CfnOutput(
+            self,
+            "HostedUiDomain",
+            value=f"https://{domain_prefix.value_as_string}.auth.{self.region}.amazoncognito.com",
+        )
 
 
 class DataStack(Stack):
@@ -420,12 +447,25 @@ class OrchestrationStack(Stack):
                 resources=[f"{provisioner_log.log_group_arn}:*"],
             )
         )
+        provisioner_boundary = iam.ManagedPolicy(
+            self,
+            "ProvisionerPermissionsBoundary",
+            managed_policy_name="spendctl-dev-provisioner-boundary",
+            statements=[
+                iam.PolicyStatement(
+                    actions=["ec2:*"],
+                    resources=["*"],
+                    conditions={"StringEquals": {"aws:RequestedRegion": "ap-south-1"}},
+                )
+            ],
+        )
         provisioner_policy_role = iam.Role(
             self,
             "ProvisionerRole",
             role_name="spendctl-dev-provisioner-role",
             assumed_by=iam.ArnPrincipal(provisioner_role.role_arn),
             description="Reservation-tagged EC2 launch and cleanup role assumed only by the M6 provisioner Lambda",
+            permissions_boundary=provisioner_boundary,
         )
         provisioner_policy_role.assume_role_policy.add_statements(
             iam.PolicyStatement(

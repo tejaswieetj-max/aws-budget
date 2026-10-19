@@ -21,7 +21,9 @@ env = Environment(
     account=app.node.try_get_context("account"),
     region=app.node.try_get_context("region") or "ap-south-1",
 )
-identity = IdentityStack(app, "IdentityStack", env=env)
+identity = IdentityStack(
+    app, "IdentityStack", cloudfront_url=app.node.try_get_context("cloudfront_url"), env=env
+)
 data = DataStack(app, "DataStack", env=env)
 lifecycle = LifecycleStack(app, "LifecycleStack", data_stack=data, env=env)
 orchestration = OrchestrationStack(
@@ -41,9 +43,7 @@ billing = BillingStack(app, "BillingStack", env=env)
 web = WebStack(app, "WebStack", env=env)
 observability = ObservabilityStack(app, "ObservabilityStack", env=env)
 if str(app.node.try_get_context("enable_naive")).lower() == "true":
-    NaiveAdmissionExperimentStack(
-        app, "NaiveAdmissionExperimentStack", data_stack=data, env=env
-    )
+    NaiveAdmissionExperimentStack(app, "NaiveAdmissionExperimentStack", data_stack=data, env=env)
 for stack in [identity, data, api, orchestration, lifecycle, billing, web, observability]:
     stack.add_dependency(data) if stack is not data else None
 api.add_dependency(identity)
