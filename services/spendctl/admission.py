@@ -32,6 +32,7 @@ from .ledger import (
     ReservationNotFound,
 )
 from .money import multiply_ceil
+from .observability import emit_emf, structured_log
 from .pricing import PricingError, PricingProvider, estimate_request
 from .validation import Request, validate_request
 
@@ -239,6 +240,11 @@ class AdmissionService:
         except (DuplicateIdempotencyKey, ReservationConflict) as error:
             raise AdmissionConflict(str(error)) from error
         except LedgerTransactionCancelled as error:
+            emit_emf("Spendctl/Admission", {"TransactionConflicts": (1, "Count")})
+            structured_log(
+                "M4", "reserve", "error", reservation_id=reservation_id,
+                error_category="transaction_cancelled",
+            )
             raise AdmissionRetryableFailure(
                 "ledger transaction was cancelled without a confirmed reservation; retry with the same key"
             ) from error
@@ -263,6 +269,7 @@ class AdmissionService:
         reservation = outcome["reservation"]
         if outcome.get("replayed"):
             return _result(reservation, replayed=True)
+        _emit_budget_utilization(self.ledger, identity.team, period)
         print(
             json.dumps(
                 {
@@ -350,6 +357,24 @@ def _reservation_id(team: str, subject: str, key: str) -> str:
 
 def _emit_admission_emf(result: str, latency_ms: float) -> None:
     """Write Embedded Metric Format to Lambda stdout for CloudWatch extraction."""
+    outcome = (
+        "admitted"
+        if result in {"admitted", "replay"}
+        else "denied"
+        if result in {"insufficient_budget", "invalid_request", "conflict"}
+        else "error"
+    )
+    metrics = [
+        {"Name": "AdmissionDecision", "Unit": "Count"},
+        {"Name": "AdmissionLatencyMs", "Unit": "Milliseconds"},
+    ]
+    values = {"AdmissionDecision": 1, "AdmissionLatencyMs": latency_ms}
+    if result == "replay":
+        metrics.append({"Name": "IdempotentReplays", "Unit": "Count"})
+        values["IdempotentReplays"] = 1
+    if result == "insufficient_budget":
+        metrics.append({"Name": "InsufficientBudgetDenials", "Unit": "Count"})
+        values["InsufficientBudgetDenials"] = 1
     print(
         json.dumps(
             {
@@ -359,21 +384,31 @@ def _emit_admission_emf(result: str, latency_ms: float) -> None:
                         {
                             "Namespace": "Spendctl/Admission",
                             "Dimensions": [["result"]],
-                            "Metrics": [
-                                {"Name": "AdmissionDecision", "Unit": "Count"},
-                                {"Name": "AdmissionLatencyMs", "Unit": "Milliseconds"},
-                            ],
+                            "Metrics": metrics,
                         }
                     ],
                 },
-                "result": result,
-                "AdmissionDecision": 1,
-                "AdmissionLatencyMs": latency_ms,
+                "result": outcome,
+                **values,
             },
             sort_keys=True,
             separators=(",", ":"),
         )
     )
+
+
+def _emit_budget_utilization(ledger, team: str, period: str) -> None:
+    """Publish a dimensionless team utilization sample for 50/80/100% alarms."""
+    try:
+        budget = ledger.get_budget(team, period)
+    except (BotoCoreError, ClientError, *_TRANSPORT_ERRORS):
+        structured_log("M11", "budget_utilization", "error", error_category="budget_read_failed")
+        return
+    if not budget or not budget.get("budget_micro"):
+        return
+    used = int(budget.get("reserved_micro", 0)) + int(budget.get("spent_micro", 0))
+    percent = used * 100.0 / int(budget["budget_micro"])
+    emit_emf("Spendctl/Budget", {"BudgetUtilizationPercent": (percent, "Percent")})
 
 
 def _check_existing(

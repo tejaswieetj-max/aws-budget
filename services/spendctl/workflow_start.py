@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+from .observability import emit_emf, structured_log
+
 try:
     from botocore.exceptions import (
         BotoCoreError,
@@ -187,6 +189,36 @@ class WorkflowStarter:
         self.ledger = ledger
 
     def start(self, reservation: dict) -> dict:
+        reservation_id = reservation["reservation_id"]
+        emit_emf("Spendctl/Workflow", {"WorkflowStartAttempts": (1, "Count")})
+        try:
+            result = self._start(reservation)
+        except WorkflowStartOutcomeUnknown as error:
+            emit_emf(
+                "Spendctl/Workflow",
+                {"WorkflowUnknownOutcomes": (1, "Count")},
+                dimensions={"result": "unknown"},
+            )
+            structured_log(
+                "M6", "start_execution", "unknown", reservation_id=reservation_id,
+                error_category=type(error).__name__,
+            )
+            raise
+        outcome = result.get("state", "STARTED")
+        success = outcome in {"STARTED", "SUCCEEDED"}
+        emit_emf(
+            "Spendctl/Workflow",
+            {"WorkflowStartSuccesses" if success else "WorkflowStartFailures": (1, "Count")},
+            dimensions={"result": "success" if success else "failure"},
+        )
+        structured_log(
+            "M6", "start_execution", "success" if success else "failure",
+            reservation_id=reservation_id, workflow_state=outcome,
+            execution_arn=result.get("executionArn"),
+        )
+        return result
+
+    def _start(self, reservation: dict) -> dict:
         ambiguous_ledger_errors = _ledger_ambiguous_errors()
         reservation_id = reservation["reservation_id"]
         name = execution_name(reservation_id)

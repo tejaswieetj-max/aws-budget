@@ -40,8 +40,23 @@ api = ApiStack(
     env=env,
 )
 billing = BillingStack(app, "BillingStack", data_stack=data, event_bus=lifecycle.event_bus, env=env)
-web = WebStack(app, "WebStack", env=env)
-observability = ObservabilityStack(app, "ObservabilityStack", env=env)
+web = WebStack(
+    app,
+    "WebStack",
+    user_pool_id=identity.pool.user_pool_id,
+    user_pool_client_id=identity.client.user_pool_client_id,
+    api_url=f"{api.api.api_endpoint}/v1",
+    env=env,
+)
+observability = ObservabilityStack(
+    app,
+    "ObservabilityStack",
+    api_stack=api,
+    orchestration_stack=orchestration,
+    lifecycle_stack=lifecycle,
+    billing_stack=billing,
+    env=env,
+)
 if str(app.node.try_get_context("enable_naive")).lower() == "true":
     NaiveAdmissionExperimentStack(app, "NaiveAdmissionExperimentStack", data_stack=data, env=env)
 for stack in [identity, data, api, orchestration, lifecycle, billing, web, observability]:
@@ -49,4 +64,10 @@ for stack in [identity, data, api, orchestration, lifecycle, billing, web, obser
 api.add_dependency(identity)
 api.add_dependency(orchestration)
 orchestration.add_dependency(lifecycle)
+web.add_dependency(identity)
+web.add_dependency(api)
+observability.add_dependency(api)
+observability.add_dependency(orchestration)
+observability.add_dependency(lifecycle)
+observability.add_dependency(billing)
 app.synth()

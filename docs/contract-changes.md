@@ -74,6 +74,11 @@ additional internal record types, using the existing `pk`/`sk` key schema:
 - The reservation item stores `billing_source_revision_order` as the applied
   manifest timestamp. A conditional comparison prevents an older export from
   overwriting a newer reconciled target.
+- A later settlement correction can update `available_micro` and `spent_micro`
+  on a `CLOSED` budget without changing its status. Admission and first final
+  settlement remain disallowed for a closed budget. This is needed for a
+  versioned CUR correction after a reservation has already reached a terminal
+  financial state; deployments require no data migration.
 
 This is necessary because the current table has no resource-ID lookup index and
 the billing pipeline requires durable exact attribution plus atomic audit.

@@ -263,6 +263,56 @@ def test_exact_reservation_tag_is_attributed_and_unknown_tag_is_not(ledger):
     assert result.unattributed == 1
 
 
+def test_cross_period_runtime_remains_unattributed_without_partial_refund(ledger):
+    ledger.db.update_item(
+        TableName="Reservations",
+        Key={"pk": {"S": "RES#r-1"}, "sk": {"S": "META"}},
+        UpdateExpression="SET launched_at = :start, expires_at = :end",
+        ExpressionAttributeValues={
+            ":start": {"S": "2026-07-31T23:30:00Z"},
+            ":end": {"S": "2026-08-01T02:30:00Z"},
+        },
+    )
+    record = normalize_record(row(line_item_unblended_cost="1.00"), object_id="cross-period")
+    result = BillingReconciler(ledger).reconcile(
+        [record],
+        billing_period="2026-07",
+        source_revision="cross-period",
+        source_revision_order="2026-08-01T00:00:00Z",
+        complete=True,
+    )
+    assert result.unattributed == 1
+    assert "spans billing periods" in result.reasons[0]["reason"]
+    reservation = ledger.get_reservation("r-1")
+    assert reservation["settlement_stage"] == "PROVISIONAL"
+    budget = ledger.get_budget("alpha", "2026-07")
+    assert (
+        budget["available_micro"] + budget["reserved_micro"] + budget["spent_micro"]
+        == budget["budget_micro"]
+    )
+
+
+def test_explicit_attributed_zero_usage_is_valid_but_absence_is_not(ledger):
+    record = normalize_record(row(line_item_unblended_cost="0.00"), object_id="zero-row")
+    result = BillingReconciler(ledger).reconcile(
+        [record],
+        billing_period="2026-07",
+        source_revision="zero-row-rev",
+        source_revision_order="2026-08-01T00:00:00Z",
+        complete=True,
+    )
+    assert result.processed == 1
+    reservation = ledger.get_reservation("r-1")
+    assert reservation["final_actual_micro"] == 0
+    budget = ledger.get_budget("alpha", "2026-07")
+    assert budget["spent_micro"] == 0
+    assert budget["available_micro"] == budget["budget_micro"]
+    assert (
+        budget["available_micro"] + budget["reserved_micro"] + budget["spent_micro"]
+        == budget["budget_micro"]
+    )
+
+
 def test_incomplete_snapshot_never_changes_ledger(ledger):
     with pytest.raises(IncompleteBillingSnapshot):
         BillingReconciler(ledger).reconcile(
@@ -282,6 +332,96 @@ def test_incomplete_snapshot_never_changes_ledger(ledger):
     )
     assert no_rows.processed == 0
     assert ledger.get_reservation("r-1")["settlement_stage"] == "PROVISIONAL"
+
+
+def test_final_correction_on_closed_budget_preserves_terminal_status_and_invariant(ledger):
+    reconciler = BillingReconciler(ledger)
+    first = normalize_record(row(line_item_unblended_cost="1.00"), object_id="close-1")
+    reconciler.reconcile(
+        [first],
+        billing_period="2026-07",
+        source_revision="close-1",
+        source_revision_order="2026-08-01T00:00:00Z",
+        complete=True,
+    )
+    ledger.close_budget(team="alpha", period="2026-07")
+    revised = normalize_record(row(line_item_unblended_cost="1.25"), object_id="close-2")
+    reconciler.reconcile(
+        [revised],
+        billing_period="2026-07",
+        source_revision="close-2",
+        source_revision_order="2026-08-02T00:00:00Z",
+        complete=True,
+    )
+    budget = ledger.get_budget("alpha", "2026-07")
+    assert budget["status"] == "CLOSED"
+    assert budget["spent_micro"] == 1_250_000
+    assert (
+        budget["available_micro"] + budget["reserved_micro"] + budget["spent_micro"]
+        == budget["budget_micro"]
+    )
+
+
+def test_m6_cleanup_release_can_receive_late_billing_correction_on_closed_budget(ledger):
+    # Settle the fixture reservation first so the period can be safely closed.
+    BillingReconciler(ledger).reconcile(
+        [normalize_record(row(line_item_unblended_cost="1.00"), object_id="r1")],
+        billing_period="2026-07",
+        source_revision="r1",
+        source_revision_order="2026-08-01T00:00:00Z",
+        complete=True,
+    )
+    ledger.reserve(
+        team="alpha",
+        period="2026-07",
+        reservation_id="r-2",
+        idempotency_key="key-2",
+        requester="user-1",
+        reserved_micro=1_000_000,
+        record={
+            "resource": {"type": "ec2", "instance_type": "t3.micro", "ebs_gb": 8},
+            "planned_hours": 2,
+        },
+    )
+    ledger.set_workflow_start_state("r-2", "STARTING", execution_name="start-r-2")
+    ledger.set_workflow_start_state("r-2", "STARTED")
+    ledger.record_workflow_execution(
+        "r-2",
+        execution_status="FAILED",
+        cleanup_state="COMPLETE",
+        instance_id="i-2",
+        volume_ids=["vol-2"],
+        launch_state="CREATED",
+        launched_at="2026-07-03T00:00:00Z",
+        terminated_at="2026-07-03T01:00:00Z",
+    )
+    ledger.release_after_confirmed_cleanup("r-2", 200_000)
+    ledger.close_budget(team="alpha", period="2026-07")
+    record = normalize_record(
+        row(
+            identity_line_item_id="r2-line",
+            line_item_resource_id="i-2",
+            line_item_unblended_cost="0.30",
+        ),
+        object_id="r2-billing",
+    )
+    BillingReconciler(ledger).reconcile(
+        [record],
+        billing_period="2026-07",
+        source_revision="r2-rev",
+        source_revision_order="2026-08-02T00:00:00Z",
+        complete=True,
+    )
+    reservation = ledger.get_reservation("r-2")
+    assert reservation["status"] == "RELEASED"
+    assert reservation["final_actual_micro"] == 300_000
+    budget = ledger.get_budget("alpha", "2026-07")
+    assert budget["status"] == "CLOSED"
+    assert budget["spent_micro"] == 1_300_000
+    assert (
+        budget["available_micro"] + budget["reserved_micro"] + budget["spent_micro"]
+        == budget["budget_micro"]
+    )
 
 
 def test_failed_financial_transaction_leaves_budget_and_audit_unchanged(ledger, monkeypatch):

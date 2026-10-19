@@ -66,10 +66,18 @@ reservation for absent rows. This intentionally leaves true-zero usage and
 records whose only charges are credits/discounts unresolved rather than
 inferring a refund.
 
+For additional safety, the current implementation leaves attribution unresolved
+when lifecycle timestamps are missing or a reservation runtime spans billing
+periods. The EC2/EBS charges then remain out of CUR correction and the
+provisional/final M6/M7 accounting stays unchanged. Supporting cross-period
+reservations requires aggregating complete snapshots for all covered periods
+before one target can be applied; it is an explicit implementation limitation.
+
 ## Revision, deduplication, and recovery
 
 The event identity is the CUR manifest's assembly ID/version and billing
-period. Manifest `createTimestamp` is the source order; a stale timestamp is
+period. Manifest `assemblyId` (or `assemblyVersion`) is the revision identity;
+manifest `createTimestamp` is the source order. A stale timestamp is
 rejected by a conditional ledger update, so S3 notifications arriving out of
 order cannot roll a newer amount back. This manifest field and its ordering
 meaning remain a VERIFY assumption. Each line item uses
@@ -114,10 +122,17 @@ evaluation remains unverified.
 2. **VERIFY:** Activate `reservation-id` and `team` cost allocation tags and
    record when each first appears in exported rows. Tag activation can lag.
 3. **VERIFY:** Inspect the actual manifest and Glue table schema in Athena.
-   Compare every field in `_CUR_COLUMNS` with the real schema. Confirm whether
+   Compare every field in `_REQUIRED_CUR_COLUMNS` and the optional field list
+   in `billing_handlers.py` with the real schema. Confirm whether
    the table represents the current export revision or contains multiple
    revisions, and identify partition columns. Do not set the opt-in parameter
    until this passes.
+   In the Athena console, select the synthesized `spendctl-dev-billing`
+   workgroup and run `DESCRIBE spendctl_billing.<configured_table>;`, then a
+   bounded representative `SELECT ... LIMIT 20` including the candidate line
+   item ID, cost, resource ID and tag columns. Confirm the scanned bytes stay
+   under the workgroup cap. Redact account/resource identifiers in saved
+   evidence; do not use the table scan as proof of completeness.
 4. **VERIFY:** Confirm the manifest is emitted after all data files are
    readable, the role can query only the intended table/workgroup, and a
    representative query stays below the 1 GiB scan cap.

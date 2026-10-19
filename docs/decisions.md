@@ -84,7 +84,7 @@ Failure cleanup is tag-scoped and polled until complete or a bounded timeout. On
 ### Budget state machine
 
 - `OPEN -> CLOSED` is allowed only when `reserved_micro == 0` and the transactionally maintained `open_reservations == 0`. The latter counts reservations from `reserve` until release or first final settlement, including provisional settlements.
-- `CLOSED` is terminal. Reservation and settlement transactions condition on `status = OPEN`, so a concurrent close and balance mutation cannot both commit.
+- `CLOSED` is terminal for admission and budget lifecycle. Initial reservations and first final settlements require `OPEN`; a later versioned accounting correction may adjust a closed budget's available/spent balances in the same transaction while leaving its status `CLOSED`. This is required for late CUR revisions and is not permission to reopen or admit against that budget.
 - A repeated close of an already closed budget is an idempotent replay. A closed budget is never reset by seeding.
 
 ### Reservation state machine

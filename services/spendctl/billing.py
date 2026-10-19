@@ -211,6 +211,13 @@ class BillingReconciler:
             reservation = self._attribute(record, result)
             if reservation is None:
                 continue
+            if not self._single_period_reservation(reservation, billing_period):
+                self._unattributed(
+                    result,
+                    record,
+                    "reservation runtime period is incomplete or spans billing periods",
+                )
+                continue
             entry = totals.setdefault(reservation["reservation_id"], {"micro": 0, "ids": []})
             entry["micro"] += record.amount_micro
             entry["ids"].append((record.record_id, record.raw_fingerprint))
@@ -304,6 +311,22 @@ class BillingReconciler:
         }
         result.reasons.append(detail)
         self.emit("BillingAttributionAmbiguous", detail)
+
+    @staticmethod
+    def _single_period_reservation(reservation: dict, billing_period: str) -> bool:
+        start = reservation.get("launched_at")
+        end = reservation.get("terminated_at") or reservation.get("expires_at")
+        if not start or not end:
+            return False
+        try:
+            start_dt = datetime.fromisoformat(start)
+            end_dt = datetime.fromisoformat(end)
+        except ValueError:
+            return False
+        return (
+            start_dt.strftime("%Y-%m") == billing_period
+            and end_dt.strftime("%Y-%m") == billing_period
+        )
 
 
 def validate_manifest(manifest: dict) -> tuple[str, str, str]:

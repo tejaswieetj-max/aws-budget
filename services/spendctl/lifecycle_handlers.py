@@ -7,18 +7,52 @@ import json
 import os
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .ledger import DynamoLedger, ReservationConflict, ReservationNotFound
 from .lifecycle import LifecycleService, inspect_bypass_event, process_instance_state_event
 from .provisioner import _assume_provisioner_role, _describe_pages
 from .workflow_start import WorkflowStarter
+from .observability import emit_emf, structured_log
 
 
 def reaper_handler(event, context):
     operation = event.get("operation", "reap")
-    if operation == "sweep":
-        return _lifecycle_service(event).sweep(limit=50)
-    return _lifecycle_service(event).reap(event)
+    service = _lifecycle_service(event)
+    try:
+        if operation == "sweep":
+            result = service.sweep(limit=50)
+            unresolved = int(result.get("unknown", 0))
+            emit_emf(
+                "Spendctl/Lifecycle",
+                {"LifecycleCleanupAttempts": (len(result.get("results", [])), "Count"),
+                 "ResourcesUnresolved": (unresolved, "Count")},
+                dimensions={"operation": "cleanup"},
+            )
+            structured_log("M7", "lifecycle_sweep", "unknown" if unresolved else "success",
+                           processed=result.get("processed", 0), unresolved=unresolved)
+            return result
+        result = service.reap(event)
+    except (BotoCoreError, ClientError, TimeoutError, ConnectionError) as error:
+        emit_emf(
+            "Spendctl/Lifecycle", {"LifecycleCleanupFailures": (1, "Count")},
+            dimensions={"result": "failure"},
+        )
+        structured_log("M7", "lifecycle_reap", "failure",
+                       reservation_id=event.get("reservation_id"),
+                       error_category=type(error).__name__)
+        raise
+    state = result.get("state", "UNKNOWN")
+    emit_emf(
+        "Spendctl/Lifecycle",
+        {"LifecycleCleanupAttempts": (1, "Count"),
+         "ResourcesUnresolved": (int(state in {"UNKNOWN", "IN_PROGRESS"}), "Count"),
+         "LifecycleExpiryCancellationOutcomes": (1, "Count")},
+        dimensions={"operation": "cancel" if event.get("reason") == "cancel" else "expiry"},
+    )
+    structured_log("M7", "lifecycle_reap", "unknown" if state == "UNKNOWN" else "success",
+                   reservation_id=event.get("reservation_id"), outcome=state)
+    return result
 
 
 def state_change_handler(event, context):

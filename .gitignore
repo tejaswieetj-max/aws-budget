@@ -6,3 +6,8 @@ cdk.out/
 .cache/jsii/
 *.py[cod]
 research/results/*.png
+
+# Generated CDK synthesis and Python build artifacts
+.cache/
+*.egg-info/
+cdk.out/

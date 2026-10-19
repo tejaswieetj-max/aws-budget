@@ -85,6 +85,12 @@ def billing_manifest_handler(event, context):
         _metric("BillingRecordsProcessed", result.processed)
         _metric("BillingRecordsUnattributed", result.unattributed)
         _metric("BillingRecordsExcluded", result.excluded)
+        _metric("BillingDuplicateRecords", result.duplicates)
+        _metric(
+            "BillingAdjustmentMicroUsd",
+            sum(int(row.get("adjustment_micro") or 0) for row in result.adjustments),
+            unit="None",
+        )
         candidates = result.processed + result.unattributed
         _metric(
             "BillingAttributionRate",
@@ -229,6 +235,7 @@ def _emit_event(name: str, detail: dict, *, ledger=None) -> None:
         "BillingLedgerConflict",
     }
     if name in alert_types:
+        _metric("BillingReconciliationFailures", 1)
         ledger = ledger or _ledger()
         alert_id = f"BILLING#{name}#{hashlib.sha256(str(event_id).encode()).hexdigest()}"
         ledger.record_alert(alert_id=alert_id, alert_type=name, details=detail)

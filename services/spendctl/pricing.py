@@ -12,6 +12,8 @@ from typing import Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from .observability import emit_emf, structured_log
+
 from .money import MICRO_USD
 from .validation import Request, validate_request
 
@@ -167,9 +169,12 @@ class CachedPricingProvider:
         key = f"{self.source}:{region}:ec2:{instance_type}:linux-shared-ondemand"
         value = self.cache.get(key)
         if value is None:
+            emit_emf("Spendctl/Pricing", {"PriceCacheMisses": (1, "Count")}, dimensions={"result": "cache_miss"})
             value = _validated_price(self.provider.instance_hourly_usd(instance_type, region), key)
             key = f"{self.source}:{region}:ec2:{instance_type}:linux-shared-ondemand"
             self.cache.set(key, value, self.ttl_seconds)
+        else:
+            emit_emf("Spendctl/Pricing", {"PriceCacheHits": (1, "Count")}, dimensions={"result": "cache_hit"})
         self.price_fetched_at = _cache_timestamp(self.cache, key)
         return value
 
@@ -177,9 +182,12 @@ class CachedPricingProvider:
         key = f"{self.source}:{region}:ebs:gp3:gb-month"
         value = self.cache.get(key)
         if value is None:
+            emit_emf("Spendctl/Pricing", {"PriceCacheMisses": (1, "Count")}, dimensions={"result": "cache_miss"})
             value = _validated_price(self.provider.gp3_gb_month_usd(region), key)
             key = f"{self.source}:{region}:ebs:gp3:gb-month"
             self.cache.set(key, value, self.ttl_seconds)
+        else:
+            emit_emf("Spendctl/Pricing", {"PriceCacheHits": (1, "Count")}, dimensions={"result": "cache_hit"})
         self.price_fetched_at = _cache_timestamp(self.cache, key)
         return value
 
@@ -201,6 +209,8 @@ class ResilientPricingProvider:
 
     def _fallback(self, error) -> None:
         self.fallback_active = True
+        emit_emf("Spendctl/Pricing", {"FallbackPriceUsage": (1, "Count")}, dimensions={"result": "fallback"})
+        structured_log("M3", "price_lookup", "fallback", error_category=type(error).__name__)
         self.log(
             json.dumps(
                 {
