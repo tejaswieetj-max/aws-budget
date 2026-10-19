@@ -202,3 +202,19 @@ may invoke the reaper once more at the original expiry, where terminal-state
 and settlement checks make the replay harmless. The schedule self-deletes after
 that invocation. A dedicated DLQ is not configured; periodic reconciliation
 and Lambda asynchronous retry behavior are the recovery mechanisms.
+# M4 invariant audit and experiment
+
+The five-minute audit derives held dollars from HELD/ACTIVE/CANCELLED/EXPIRED
+reservation rows with no settlement stage; PROVISIONAL rows contribute their
+provisional amount to spent while remaining open; FINAL rows contribute the
+final actual amount and are closed. It reads all scanned items consistently,
+then rescans once after a short delay before raising an alert because DynamoDB
+does not offer a cross-table snapshot. Alert IDs are stable per team, budget
+period and five-minute window. An audit EventBridge event is emitted for each
+observed discrepancy, including when a prior Alert write was de-duplicated.
+
+The intentionally unsafe GetItem/check/unconditional-Update implementation is
+only in an opt-in test stack (`-c enable_naive=true`) and requires both
+`ADMISSION_MODE=naive` and `ALLOW_NAIVE_ADMISSION=true`. It is not wired to the
+API or standard stacks. It exists solely as a counterexample; its arithmetic
+can violate the ledger invariant under concurrency.

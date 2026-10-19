@@ -16,6 +16,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_scheduler as scheduler
+from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_ssm as ssm
 from aws_cdk import aws_stepfunctions as stepfunctions
 from constructs import Construct
@@ -238,7 +239,9 @@ class ApiStack(Stack):
             type="String",
             description="Deployed frontend origin allowed by API CORS, including scheme and hostname",
         )
-        table_env["CORS_ALLOWED_ORIGINS"] = f"http://localhost:5173,{cloudfront_origin.value_as_string}"
+        table_env["CORS_ALLOWED_ORIGINS"] = (
+            f"http://localhost:5173,{cloudfront_origin.value_as_string}"
+        )
         authorizer = apigatewayv2_authorizers.HttpJwtAuthorizer(
             "SpendctlCognitoAuthorizer",
             user_pool.user_pool_provider_url,
@@ -975,9 +978,7 @@ class LifecycleStack(Stack):
         Tags.of(self).add("project", "spendctl")
         Tags.of(self).add("env", "dev")
         source = str(Path(__file__).resolve().parents[2] / "services")
-        self.event_bus = events.EventBus(
-            self, "SpendctlEventBus", event_bus_name="spendctl-bus"
-        )
+        self.event_bus = events.EventBus(self, "SpendctlEventBus", event_bus_name="spendctl-bus")
         self.schedule_group_name = "spendctl-expiry"
         self.schedule_group = scheduler.CfnScheduleGroup(
             self, "ExpiryScheduleGroup", name=self.schedule_group_name
@@ -1072,13 +1073,17 @@ class LifecycleStack(Stack):
             )
         )
         self.reaper_role.add_to_policy(
-            iam.PolicyStatement(actions=["states:StartExecution", "states:ListExecutions"], resources=[machine_arn])
+            iam.PolicyStatement(
+                actions=["states:StartExecution", "states:ListExecutions"], resources=[machine_arn]
+            )
         )
         self.reaper_role.add_to_policy(
             iam.PolicyStatement(actions=["states:DescribeExecution"], resources=[execution_arn])
         )
         self.reaper_role.add_to_policy(
-            iam.PolicyStatement(actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn])
+            iam.PolicyStatement(
+                actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn]
+            )
         )
 
         self.state_listener, self.state_listener_role = function(
@@ -1092,7 +1097,9 @@ class LifecycleStack(Stack):
             iam.PolicyStatement(actions=["ec2:DescribeInstances"], resources=["*"])
         )
         self.state_listener_role.add_to_policy(
-            iam.PolicyStatement(actions=["dynamodb:GetItem", "dynamodb:UpdateItem"], resources=[reservations_arn])
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem", "dynamodb:UpdateItem"], resources=[reservations_arn]
+            )
         )
         self.state_listener_role.add_to_policy(
             iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
@@ -1108,7 +1115,9 @@ class LifecycleStack(Stack):
             iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[reservations_arn])
         )
         self.bypass_detector_role.add_to_policy(
-            iam.PolicyStatement(actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn])
+            iam.PolicyStatement(
+                actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn]
+            )
         )
         self.orphan_auditor, self.orphan_auditor_role = function(
             "orphan_auditor",
@@ -1119,7 +1128,9 @@ class LifecycleStack(Stack):
             timeout_seconds=30,
         )
         self.orphan_auditor_role.add_to_policy(
-            iam.PolicyStatement(actions=["ec2:DescribeInstances", "ec2:DescribeVolumes"], resources=["*"])
+            iam.PolicyStatement(
+                actions=["ec2:DescribeInstances", "ec2:DescribeVolumes"], resources=["*"]
+            )
         )
         self.orphan_auditor_role.add_to_policy(
             iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[reservations_arn])
@@ -1128,15 +1139,110 @@ class LifecycleStack(Stack):
             iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
         )
 
+        invariant_name = "spendctl-dev-m4-invariant-checker"
+        invariant_log = logs.LogGroup(
+            self,
+            "InvariantCheckerLogGroup",
+            log_group_name=f"/aws/lambda/{invariant_name}",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.invariant_checker_role = iam.Role(
+            self,
+            "InvariantCheckerRole",
+            role_name=f"{invariant_name}-role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+        )
+        self.invariant_checker_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources=[f"{invariant_log.log_group_arn}:*"],
+            )
+        )
+        self.invariant_checker_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Scan"], resources=[budgets_arn, reservations_arn]
+            )
+        )
+        self.invariant_checker_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
+        )
+        self.invariant_checker_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn]
+            )
+        )
+        self.invariant_checker = lambda_.Function(
+            self,
+            "InvariantCheckerFunction",
+            function_name=invariant_name,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="spendctl.invariant_handlers.invariant_checker_handler",
+            code=lambda_.Code.from_asset(source),
+            role=self.invariant_checker_role,
+            memory_size=256,
+            timeout=Duration.seconds(10),
+            environment={
+                "BUDGETS_TABLE": data_stack.budgets.table_name,
+                "RESERVATIONS_TABLE": data_stack.reservations.table_name,
+                "ALERTS_TABLE": data_stack.alerts.table_name,
+                "EVENT_BUS_NAME": self.event_bus.event_bus_name,
+            },
+        )
+        self.invariant_dlq = sqs.Queue(
+            self,
+            "InvariantCheckerDlq",
+            queue_name="spendctl-dev-invariant-checker-dlq",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            retention_period=Duration.days(14),
+            removal_policy=RemovalPolicy.RETAIN,
+        )
         schedule_trust = iam.ServicePrincipal(
             "scheduler.amazonaws.com",
             conditions={
                 "StringEquals": {"aws:SourceAccount": self.account},
-                "ArnLike": {
-                    "aws:SourceArn": self.schedule_group.attr_arn,
-                },
+                "ArnLike": {"aws:SourceArn": self.schedule_group.attr_arn},
             },
         )
+        invariant_schedule_role = iam.Role(
+            self,
+            "InvariantCheckerScheduleRole",
+            role_name="spendctl-dev-m4-invariant-schedule-role",
+            assumed_by=schedule_trust,
+        )
+        invariant_schedule_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[self.invariant_checker.function_arn],
+            )
+        )
+        invariant_schedule_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["sqs:SendMessage"], resources=[self.invariant_dlq.queue_arn]
+            )
+        )
+        self.invariant_schedule = scheduler.CfnSchedule(
+            self,
+            "InvariantCheckerSchedule",
+            name="spendctl-dev-invariant-check-5m",
+            group_name=self.schedule_group_name,
+            schedule_expression="rate(5 minutes)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=self.invariant_checker.function_arn,
+                role_arn=invariant_schedule_role.role_arn,
+                input='{"operation":"check_invariants"}',
+                dead_letter_config=scheduler.CfnSchedule.DeadLetterConfigProperty(
+                    arn=self.invariant_dlq.queue_arn
+                ),
+                retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(
+                    maximum_event_age_in_seconds=3600,
+                    maximum_retry_attempts=3,
+                ),
+            ),
+            state="ENABLED",
+        )
+
         self.scheduler_role = iam.Role(
             self,
             "ExpiryScheduleTargetRole",
@@ -1203,3 +1309,54 @@ class WebStack(Stack):
 
 class ObservabilityStack(Stack):
     pass
+
+
+class NaiveAdmissionExperimentStack(Stack):
+    """Opt-in, non-API stack used only to compare unsafe admission concurrency."""
+
+    def __init__(self, scope: Construct, construct_id: str, *, data_stack, **kwargs):
+        super().__init__(scope, construct_id, **kwargs)
+        Tags.of(self).add("project", "spendctl")
+        Tags.of(self).add("env", "dev")
+        function_name = "spendctl-test-naive-admission"
+        log_group = logs.LogGroup(
+            self,
+            "NaiveAdmissionLogGroup",
+            log_group_name=f"/aws/lambda/{function_name}",
+            retention=logs.RetentionDays.ONE_WEEK,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        role = iam.Role(
+            self,
+            "NaiveAdmissionRole",
+            role_name=f"{function_name}-role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources=[f"{log_group.log_group_arn}:*"],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
+                resources=[data_stack.budgets.table_arn],
+            )
+        )
+        lambda_.Function(
+            self,
+            "NaiveAdmissionFunction",
+            function_name=function_name,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="spendctl.naive_admission.naive_admission_handler",
+            code=lambda_.Code.from_asset(str(Path(__file__).resolve().parents[2] / "services")),
+            role=role,
+            memory_size=256,
+            timeout=Duration.seconds(10),
+            environment={
+                "BUDGETS_TABLE": data_stack.budgets.table_name,
+                "ADMISSION_MODE": "naive",
+                "ALLOW_NAIVE_ADMISSION": "true",
+            },
+        )

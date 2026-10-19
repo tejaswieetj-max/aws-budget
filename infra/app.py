@@ -8,6 +8,7 @@ from stacks.foundation import (
     DataStack,
     IdentityStack,
     LifecycleStack,
+    NaiveAdmissionExperimentStack,
     ObservabilityStack,
     OrchestrationStack,
     WebStack,
@@ -39,6 +40,10 @@ api = ApiStack(
 billing = BillingStack(app, "BillingStack", env=env)
 web = WebStack(app, "WebStack", env=env)
 observability = ObservabilityStack(app, "ObservabilityStack", env=env)
+if str(app.node.try_get_context("enable_naive")).lower() == "true":
+    NaiveAdmissionExperimentStack(
+        app, "NaiveAdmissionExperimentStack", data_stack=data, env=env
+    )
 for stack in [identity, data, api, orchestration, lifecycle, billing, web, observability]:
     stack.add_dependency(data) if stack is not data else None
 api.add_dependency(identity)

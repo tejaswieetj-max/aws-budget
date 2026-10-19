@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -123,6 +124,46 @@ class AdmissionService:
         idempotency_key: str,
     ) -> dict:
         """Reserve budget atomically. This method never starts provisioning."""
+        started = time.perf_counter()
+        result = "error"
+        try:
+            outcome = self._admit(
+                payload,
+                identity=identity,
+                period=period,
+                idempotency_key=idempotency_key,
+            )
+            result = "replay" if outcome.get("replayed") else "admitted"
+            return outcome
+        except AdmissionOutcomeUnknown:
+            result = "pending_unknown"
+            raise
+        except AdmissionInsufficientBudget:
+            result = "insufficient_budget"
+            raise
+        except AdmissionConflict:
+            result = "conflict"
+            raise
+        except AdmissionPricingUnavailable:
+            result = "pricing_unavailable"
+            raise
+        except AdmissionRetryableFailure:
+            result = "retryable_error"
+            raise
+        except (TypeError, ValueError):
+            result = "invalid_request"
+            raise
+        finally:
+            _emit_admission_emf(result, (time.perf_counter() - started) * 1000)
+
+    def _admit(
+        self,
+        payload: dict,
+        *,
+        identity: VerifiedIdentity,
+        period: str,
+        idempotency_key: str,
+    ) -> dict:
         request = _authorized_request(payload, identity)
         _validate_admission_metadata(period, idempotency_key)
         reservation_id = _reservation_id(identity.team, identity.subject, idempotency_key)
@@ -157,6 +198,11 @@ class AdmissionService:
 
         multiplier = self._multiplier()
         reserved_micro = multiply_ceil(estimate["total_micro"], multiplier)
+        policies = self.policies or MarginPolicies()
+        shadow_candidates = {
+            policy: str(Decimal(str(policies.get("ec2", policy))))
+            for policy in ("fixed", "rolling_quantile", "split_conformal", "adaptive")
+        }
         record = {
             "resource": {
                 "type": "ec2",
@@ -168,6 +214,7 @@ class AdmissionService:
             "compute_micro": estimate["compute_micro"],
             "storage_micro": estimate["storage_micro"],
             "margin": str(multiplier),
+            "shadow_margin_candidates": shadow_candidates,
             "price_snapshot_id": estimate["price_snapshot_id"],
             "price_source": estimate["source"],
             "estimate_breakdown": estimate["breakdown"],
@@ -213,6 +260,19 @@ class AdmissionService:
         reservation = outcome["reservation"]
         if outcome.get("replayed"):
             return _result(reservation, replayed=True)
+        print(
+            json.dumps(
+                {
+                    "event": "AdmissionReserved",
+                    "reservation_id": reservation_id,
+                    "estimate_breakdown": estimate["breakdown"],
+                    "price_snapshot_id": estimate["price_snapshot_id"],
+                    "shadow_margin_candidates": shadow_candidates,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         return {
             "state": "ADMITTED",
             "http_status": 200 if outcome.get("replayed") else 202,
@@ -283,6 +343,34 @@ def _reservation_id(team: str, subject: str, key: str) -> str:
     material = json.dumps([team, subject, key], ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(material.encode()).hexdigest()
     return f"rsv_{digest[:40]}"
+
+
+def _emit_admission_emf(result: str, latency_ms: float) -> None:
+    """Write Embedded Metric Format to Lambda stdout for CloudWatch extraction."""
+    print(
+        json.dumps(
+            {
+                "_aws": {
+                    "Timestamp": int(time.time() * 1000),
+                    "CloudWatchMetrics": [
+                        {
+                            "Namespace": "Spendctl/Admission",
+                            "Dimensions": [["result"]],
+                            "Metrics": [
+                                {"Name": "AdmissionDecision", "Unit": "Count"},
+                                {"Name": "AdmissionLatencyMs", "Unit": "Milliseconds"},
+                            ],
+                        }
+                    ],
+                },
+                "result": result,
+                "AdmissionDecision": 1,
+                "AdmissionLatencyMs": latency_ms,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _check_existing(
