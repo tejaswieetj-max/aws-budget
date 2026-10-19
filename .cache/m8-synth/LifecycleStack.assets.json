@@ -1,0 +1,36 @@
+{
+  "version": "54.0.0",
+  "files": {
+    "a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5": {
+      "displayName": "reaperFunction/Code",
+      "source": {
+        "path": "asset.a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "current_account-ap-south-1-b96b1e41": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-ap-south-1",
+          "objectKey": "a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5.zip",
+          "region": "ap-south-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-ap-south-1"
+        }
+      }
+    },
+    "06b3a6775710a5c46f669680ccbc02c1104aadab56841ba48dd36ac461433813": {
+      "displayName": "LifecycleStack Template",
+      "source": {
+        "path": "LifecycleStack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "current_account-ap-south-1-5be7fb78": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-ap-south-1",
+          "objectKey": "06b3a6775710a5c46f669680ccbc02c1104aadab56841ba48dd36ac461433813.json",
+          "region": "ap-south-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-ap-south-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

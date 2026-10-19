@@ -39,7 +39,7 @@ api = ApiStack(
     lifecycle_reaper_arn=lifecycle.reaper.function_arn,
     env=env,
 )
-billing = BillingStack(app, "BillingStack", env=env)
+billing = BillingStack(app, "BillingStack", data_stack=data, event_bus=lifecycle.event_bus, env=env)
 web = WebStack(app, "WebStack", env=env)
 observability = ObservabilityStack(app, "ObservabilityStack", env=env)
 if str(app.node.try_get_context("enable_naive")).lower() == "true":

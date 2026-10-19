@@ -1,0 +1,402 @@
+{
+ "Resources": {
+  "Budgets847BC00E": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "team",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "period",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "team",
+      "KeyType": "HASH"
+     },
+     {
+      "AttributeName": "period",
+      "KeyType": "RANGE"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": true
+    },
+    "SSESpecification": {
+     "SSEEnabled": true
+    },
+    "TableName": "spendctl-dev-budgets",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "Reservations25D4BAC6": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "pk",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "sk",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "team",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "created_at",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "status",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "expires_at",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "GlobalSecondaryIndexes": [
+     {
+      "IndexName": "team-created-index",
+      "KeySchema": [
+       {
+        "AttributeName": "team",
+        "KeyType": "HASH"
+       },
+       {
+        "AttributeName": "created_at",
+        "KeyType": "RANGE"
+       }
+      ],
+      "Projection": {
+       "ProjectionType": "ALL"
+      }
+     },
+     {
+      "IndexName": "status-expiry-index",
+      "KeySchema": [
+       {
+        "AttributeName": "status",
+        "KeyType": "HASH"
+       },
+       {
+        "AttributeName": "expires_at",
+        "KeyType": "RANGE"
+       }
+      ],
+      "Projection": {
+       "ProjectionType": "ALL"
+      }
+     }
+    ],
+    "KeySchema": [
+     {
+      "AttributeName": "pk",
+      "KeyType": "HASH"
+     },
+     {
+      "AttributeName": "sk",
+      "KeyType": "RANGE"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": true
+    },
+    "SSESpecification": {
+     "SSEEnabled": true
+    },
+    "TableName": "spendctl-dev-reservations",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ],
+    "TimeToLiveSpecification": {
+     "AttributeName": "ttl",
+     "Enabled": true
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "PriceCacheBFAE7B11": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "sku_key",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "sku_key",
+      "KeyType": "HASH"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": false
+    },
+    "SSESpecification": {
+     "SSEEnabled": true
+    },
+    "TableName": "spendctl-dev-pricecache",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ],
+    "TimeToLiveSpecification": {
+     "AttributeName": "ttl",
+     "Enabled": true
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "CostSamplesD8F65169": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "resource_class",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "settled_at",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "resource_class",
+      "KeyType": "HASH"
+     },
+     {
+      "AttributeName": "settled_at",
+      "KeyType": "RANGE"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": false
+    },
+    "SSESpecification": {
+     "SSEEnabled": true
+    },
+    "TableName": "spendctl-dev-costsamples",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "Alerts91F83244": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "alert_id",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "alert_id",
+      "KeyType": "HASH"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": false
+    },
+    "SSESpecification": {
+     "SSEEnabled": true
+    },
+    "TableName": "spendctl-dev-alerts",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  }
+ },
+ "Outputs": {
+  "ExportsOutputFnGetAttReservations25D4BAC6Arn19CBC79F": {
+   "Value": {
+    "Fn::GetAtt": [
+     "Reservations25D4BAC6",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputFnGetAttReservations25D4BAC6Arn19CBC79F"
+   }
+  },
+  "ExportsOutputFnGetAttBudgets847BC00EArn6F0BAA09": {
+   "Value": {
+    "Fn::GetAtt": [
+     "Budgets847BC00E",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputFnGetAttBudgets847BC00EArn6F0BAA09"
+   }
+  },
+  "ExportsOutputFnGetAttAlerts91F83244ArnA9D70E57": {
+   "Value": {
+    "Fn::GetAtt": [
+     "Alerts91F83244",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputFnGetAttAlerts91F83244ArnA9D70E57"
+   }
+  },
+  "ExportsOutputRefBudgets847BC00E155A05B5": {
+   "Value": {
+    "Ref": "Budgets847BC00E"
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputRefBudgets847BC00E155A05B5"
+   }
+  },
+  "ExportsOutputRefReservations25D4BAC67754F061": {
+   "Value": {
+    "Ref": "Reservations25D4BAC6"
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputRefReservations25D4BAC67754F061"
+   }
+  },
+  "ExportsOutputRefAlerts91F83244F0271852": {
+   "Value": {
+    "Ref": "Alerts91F83244"
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputRefAlerts91F83244F0271852"
+   }
+  },
+  "ExportsOutputFnGetAttPriceCacheBFAE7B11Arn17D554DE": {
+   "Value": {
+    "Fn::GetAtt": [
+     "PriceCacheBFAE7B11",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputFnGetAttPriceCacheBFAE7B11Arn17D554DE"
+   }
+  },
+  "ExportsOutputRefCostSamplesD8F651695A4171AD": {
+   "Value": {
+    "Ref": "CostSamplesD8F65169"
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputRefCostSamplesD8F651695A4171AD"
+   }
+  },
+  "ExportsOutputRefPriceCacheBFAE7B11A1C92758": {
+   "Value": {
+    "Ref": "PriceCacheBFAE7B11"
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputRefPriceCacheBFAE7B11A1C92758"
+   }
+  },
+  "ExportsOutputFnGetAttCostSamplesD8F65169ArnC543B668": {
+   "Value": {
+    "Fn::GetAtt": [
+     "CostSamplesD8F65169",
+     "Arn"
+    ]
+   },
+   "Export": {
+    "Name": "DataStack:ExportsOutputFnGetAttCostSamplesD8F65169ArnC543B668"
+   }
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

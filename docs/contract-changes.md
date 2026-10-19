@@ -59,3 +59,27 @@ Partial/unknown cleanup never releases funds and creates a durable alert. Runtim
 actual is prorated from recorded compute and gp3 snapshot rates, with a 60
 second minimum for a created EC2 instance; no resource means zero. This is a
 local accounting estimate, not CUR actual cost.
+# M8 internal persistence extension (2026-10-20)
+
+No public API route, response, event name, ownership tag, reservation status,
+or budget invariant changed. The existing Reservations table now contains two
+additional internal record types, using the existing `pk`/`sk` key schema:
+
+- `RESOURCE#<resource-id>` / `MAP` stores the exact resource-to-reservation
+  mapping and team, transactionally with workflow resource identity updates.
+- `BILLING#<reconciliation-id>` / `RECONCILIATION` stores the billing period,
+  source revision, input digest, previous/new actual, incremental adjustment,
+  settlement identity/version, and attributed line-item identities. It is
+  written in the same transaction as final settlement and budget adjustment.
+- The reservation item stores `billing_source_revision_order` as the applied
+  manifest timestamp. A conditional comparison prevents an older export from
+  overwriting a newer reconciled target.
+
+This is necessary because the current table has no resource-ID lookup index and
+the billing pipeline requires durable exact attribution plus atomic audit.
+Existing table keys, GSIs, public reservation semantics and lifecycle states
+are unchanged. Existing deployments need no key/index migration; old
+reservations without `RESOURCE#…` rows are not retroactively attributed by
+guess. No migration/backfill is performed automatically. If live schema or
+transaction validation finds that records exceed DynamoDB's transaction size,
+the pipeline must fail closed; do not split the financial write from its audit.

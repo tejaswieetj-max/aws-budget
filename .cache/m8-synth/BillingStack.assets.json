@@ -1,0 +1,36 @@
+{
+  "version": "54.0.0",
+  "files": {
+    "a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5": {
+      "displayName": "BillingReconcilerFunction/Code",
+      "source": {
+        "path": "asset.a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "current_account-ap-south-1-b96b1e41": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-ap-south-1",
+          "objectKey": "a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5.zip",
+          "region": "ap-south-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-ap-south-1"
+        }
+      }
+    },
+    "674009efba0e489c17030d75fc7d093587b1748b0a030418dc4c2893f1df5a3c": {
+      "displayName": "BillingStack Template",
+      "source": {
+        "path": "BillingStack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "current_account-ap-south-1-287f3d85": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-ap-south-1",
+          "objectKey": "674009efba0e489c17030d75fc7d093587b1748b0a030418dc4c2893f1df5a3c.json",
+          "region": "ap-south-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-ap-south-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

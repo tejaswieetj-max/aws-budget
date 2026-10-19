@@ -51,9 +51,25 @@ permissions boundary permits only EC2 actions in `ap-south-1`; the role's
 resource policy remains the narrower operation/tag policy. Caller permission
 for `sts:TagSession` is intentionally left for the M1 verification to prove.
 
-M8 groundwork creates storage/catalog/query infrastructure only. Cost and
-Usage Data Export creation remains a manual, separately approved account step
-so its actual export identity, delivery policy and schema can be verified.
+M8 uses an S3 manifest notification to a dedicated reconciler Lambda. The
+manual Data Export and Glue table are still separately configured; the
+`EnableBillingReconciliation` stack parameter defaults to false. A validated
+manifest and a 60-day period-age guard are operational safeguards, not proof of
+final completeness. The handler fails closed on a field/schema mismatch and
+only adjusts reservations with attributable positive usage rows.
+
+CUR amounts use `line_item_net_unblended_cost` when populated, else
+`line_item_unblended_cost`. Parse with `Decimal`, multiply USD by 1,000,000,
+then round to integer micro-USD with `ROUND_HALF_EVEN`, including signed values.
+Only `Usage` for AmazonEC2/AmazonEBS is in scope. Credits, refunds, discounts,
+taxes, fees, non-usage and unknown services remain excluded/unattributed; no
+team budget is refunded on a negative adjustment or absent row. The ledger
+applies only `new attributable target - previously booked target` and writes
+the settlement and audit record atomically. A later export revision creates a
+new settlement version. `createTimestamp` is used as the monotonic ordering
+field; the ledger rejects an older export revision after a newer one has been
+applied. Its presence and ordering semantics are local fixture assumptions
+pending account verification.
 
 ## Crash-safe workflow start
 

@@ -1,6 +1,7 @@
 .PHONY: install lint test synth diff deploy seed verify demo teardown research
 export PYTHONPATH := services:$(PYTHONPATH)
 PYTHON ?= .venv/bin/python
+CDK_OUTDIR ?= cdk.out
 install:
 	python3.12 -m pip install -e '.[dev]'
 lint:
@@ -8,7 +9,7 @@ lint:
 test:
 	$(PYTHON) -m pytest -q
 synth:
-	CDK_OUTDIR=cdk.out JSII_RUNTIME_PACKAGE_CACHE_ROOT=.cache/jsii $(PYTHON) infra/app.py
+	CDK_OUTDIR=$(CDK_OUTDIR) JSII_RUNTIME_PACKAGE_CACHE_ROOT=.cache/jsii $(PYTHON) infra/app.py
 diff:
 	@echo 'Review docs/aws-setup.md and the synthesized template before any AWS change.'
 	cdk diff

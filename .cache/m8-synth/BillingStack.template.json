@@ -1,0 +1,858 @@
+{
+ "Resources": {
+  "CurExportsBucket2DD8BCCA": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "ExpirationInDays": 365,
+       "Status": "Enabled"
+      }
+     ]
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "CurExportsBucketPolicyDDA05281": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "CurExportsBucket2DD8BCCA"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "CurExportsBucket2DD8BCCA",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "CurExportsBucket2DD8BCCA",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   }
+  },
+  "CurExportsBucketNotificationsHandlerPolicyCCCA4DDF": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:PutBucketNotification",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "CurExportsBucket2DD8BCCA",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "CurExportsBucketNotificationsHandlerPolicyCCCA4DDF",
+    "Roles": [
+     {
+      "Ref": "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC"
+     }
+    ]
+   }
+  },
+  "CurExportsBucketNotificationsC6CEB9F8": {
+   "Type": "Custom::S3BucketNotifications",
+   "Properties": {
+    "ServiceToken": {
+     "Fn::GetAtt": [
+      "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691",
+      "Arn"
+     ]
+    },
+    "BucketName": {
+     "Ref": "CurExportsBucket2DD8BCCA"
+    },
+    "NotificationConfiguration": {
+     "LambdaFunctionConfigurations": [
+      {
+       "Events": [
+        "s3:ObjectCreated:*"
+       ],
+       "Filter": {
+        "Key": {
+         "FilterRules": [
+          {
+           "Name": "suffix",
+           "Value": "Manifest.json"
+          },
+          {
+           "Name": "prefix",
+           "Value": {
+            "Ref": "CurExportPrefix"
+           }
+          }
+         ]
+        }
+       },
+       "LambdaFunctionArn": {
+        "Fn::GetAtt": [
+         "BillingReconcilerFunction0AD097B6",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Events": [
+        "s3:ObjectCreated:*"
+       ],
+       "Filter": {
+        "Key": {
+         "FilterRules": [
+          {
+           "Name": "suffix",
+           "Value": "manifest.json"
+          },
+          {
+           "Name": "prefix",
+           "Value": {
+            "Ref": "CurExportPrefix"
+           }
+          }
+         ]
+        }
+       },
+       "LambdaFunctionArn": {
+        "Fn::GetAtt": [
+         "BillingReconcilerFunction0AD097B6",
+         "Arn"
+        ]
+       }
+      }
+     ]
+    },
+    "Managed": true,
+    "SkipDestinationValidation": false
+   },
+   "DependsOn": [
+    "CurExportsBucketAllowBucketNotificationsToBillingStackBillingReconcilerFunctionF9175665AB4726CB",
+    "CurExportsBucketNotificationsHandlerPolicyCCCA4DDF",
+    "CurExportsBucketPolicyDDA05281"
+   ]
+  },
+  "CurExportsBucketAllowBucketNotificationsToBillingStackBillingReconcilerFunctionF9175665AB4726CB": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "BillingReconcilerFunction0AD097B6",
+      "Arn"
+     ]
+    },
+    "Principal": "s3.amazonaws.com",
+    "SourceAccount": {
+     "Ref": "AWS::AccountId"
+    },
+    "SourceArn": {
+     "Fn::GetAtt": [
+      "CurExportsBucket2DD8BCCA",
+      "Arn"
+     ]
+    }
+   }
+  },
+  "AthenaResultsBucket879938FA": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "ExpirationInDays": 30,
+       "Status": "Enabled"
+      }
+     ]
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "AthenaResultsBucketPolicyD63DEF63": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "AthenaResultsBucket879938FA"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AthenaResultsBucket879938FA",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "AthenaResultsBucket879938FA",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   }
+  },
+  "BillingGlueDatabase": {
+   "Type": "AWS::Glue::Database",
+   "Properties": {
+    "CatalogId": {
+     "Ref": "AWS::AccountId"
+    },
+    "DatabaseInput": {
+     "Name": "spendctl_billing"
+    }
+   }
+  },
+  "BillingAthenaWorkgroup": {
+   "Type": "AWS::Athena::WorkGroup",
+   "Properties": {
+    "Name": "spendctl-dev-billing",
+    "RecursiveDeleteOption": false,
+    "State": "ENABLED",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ],
+    "WorkGroupConfiguration": {
+     "BytesScannedCutoffPerQuery": 1073741824,
+     "EnforceWorkGroupConfiguration": true,
+     "PublishCloudWatchMetricsEnabled": true,
+     "ResultConfiguration": {
+      "EncryptionConfiguration": {
+       "EncryptionOption": "SSE_S3"
+      },
+      "OutputLocation": {
+       "Fn::Join": [
+        "",
+        [
+         "s3://",
+         {
+          "Ref": "AthenaResultsBucket879938FA"
+         },
+         "/results/"
+        ]
+       ]
+      }
+     }
+    }
+   }
+  },
+  "BillingReconcilerLogGroup93491831": {
+   "Type": "AWS::Logs::LogGroup",
+   "Properties": {
+    "LogGroupName": "/aws/lambda/spendctl-dev-m8-billing-reconciler",
+    "RetentionInDays": 30,
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain"
+  },
+  "BillingReconcilerRole73F03E66": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "RoleName": "spendctl-dev-m8-billing-reconciler-role",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   }
+  },
+  "BillingReconcilerRoleDefaultPolicyD1EC20B5": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "BillingReconcilerLogGroup93491831",
+            "Arn"
+           ]
+          },
+          ":*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": "s3:GetObject",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "CurExportsBucket2DD8BCCA",
+            "Arn"
+           ]
+          },
+          "/",
+          {
+           "Ref": "CurExportPrefix"
+          },
+          "*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "CurExportsBucket2DD8BCCA",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:AbortMultipartUpload"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "AthenaResultsBucket879938FA",
+            "Arn"
+           ]
+          },
+          "/results/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "AthenaResultsBucket879938FA",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": "athena:StartQueryExecution",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          "arn:",
+          {
+           "Ref": "AWS::Partition"
+          },
+          ":athena:ap-south-1:",
+          {
+           "Ref": "AWS::AccountId"
+          },
+          ":workgroup/spendctl-dev-billing"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults"
+       ],
+       "Effect": "Allow",
+       "Resource": "*"
+      },
+      {
+       "Action": [
+        "glue:GetDatabase",
+        "glue:GetTables",
+        "glue:GetTable",
+        "glue:GetPartitions"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::Join": [
+          "",
+          [
+           "arn:",
+           {
+            "Ref": "AWS::Partition"
+           },
+           ":glue:ap-south-1:",
+           {
+            "Ref": "AWS::AccountId"
+           },
+           ":catalog"
+          ]
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           "arn:",
+           {
+            "Ref": "AWS::Partition"
+           },
+           ":glue:ap-south-1:",
+           {
+            "Ref": "AWS::AccountId"
+           },
+           ":database/spendctl_billing"
+          ]
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           "arn:",
+           {
+            "Ref": "AWS::Partition"
+           },
+           ":glue:ap-south-1:",
+           {
+            "Ref": "AWS::AccountId"
+           },
+           ":table/spendctl_billing/",
+           {
+            "Ref": "CurTableName"
+           }
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:TransactWriteItems"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::ImportValue": "DataStack:ExportsOutputFnGetAttBudgets847BC00EArn6F0BAA09"
+        },
+        {
+         "Fn::ImportValue": "DataStack:ExportsOutputFnGetAttReservations25D4BAC6Arn19CBC79F"
+        },
+        {
+         "Fn::ImportValue": "DataStack:ExportsOutputFnGetAttAlerts91F83244ArnA9D70E57"
+        }
+       ]
+      },
+      {
+       "Action": "events:PutEvents",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::ImportValue": "LifecycleStack:ExportsOutputFnGetAttSpendctlEventBusEF081C7BArn64F37346"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "BillingReconcilerRoleDefaultPolicyD1EC20B5",
+    "Roles": [
+     {
+      "Ref": "BillingReconcilerRole73F03E66"
+     }
+    ]
+   }
+  },
+  "BillingReconcilerFunction0AD097B6": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": {
+      "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-ap-south-1"
+     },
+     "S3Key": "a71db5d0567aa3ace805d6309e93889c079894d96049fc06a9cb3bc2bdf38da5.zip"
+    },
+    "Environment": {
+     "Variables": {
+      "CUR_EXPORT_BUCKET": {
+       "Ref": "CurExportsBucket2DD8BCCA"
+      },
+      "CUR_EXPORT_PREFIX": {
+       "Ref": "CurExportPrefix"
+      },
+      "CUR_TABLE": {
+       "Ref": "CurTableName"
+      },
+      "ATHENA_WORKGROUP": "spendctl-dev-billing",
+      "ATHENA_RESULTS_BUCKET": {
+       "Ref": "AthenaResultsBucket879938FA"
+      },
+      "BUDGETS_TABLE": {
+       "Fn::ImportValue": "DataStack:ExportsOutputRefBudgets847BC00E155A05B5"
+      },
+      "RESERVATIONS_TABLE": {
+       "Fn::ImportValue": "DataStack:ExportsOutputRefReservations25D4BAC67754F061"
+      },
+      "ALERTS_TABLE": {
+       "Fn::ImportValue": "DataStack:ExportsOutputRefAlerts91F83244F0271852"
+      },
+      "EVENT_BUS_NAME": {
+       "Fn::ImportValue": "LifecycleStack:ExportsOutputRefSpendctlEventBusEF081C7B14BA67AB"
+      },
+      "BILLING_RECONCILIATION_ENABLED": {
+       "Ref": "EnableBillingReconciliation"
+      },
+      "CUR_FINALIZATION_DELAY_DAYS": "60",
+      "ATHENA_QUERY_TIMEOUT_SECONDS": "240"
+     }
+    },
+    "FunctionName": "spendctl-dev-m8-billing-reconciler",
+    "Handler": "spendctl.billing_handlers.billing_manifest_handler",
+    "MemorySize": 512,
+    "Role": {
+     "Fn::GetAtt": [
+      "BillingReconcilerRole73F03E66",
+      "Arn"
+     ]
+    },
+    "Runtime": "python3.12",
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ],
+    "Timeout": 300
+   },
+   "DependsOn": [
+    "BillingReconcilerRoleDefaultPolicyD1EC20B5",
+    "BillingReconcilerRole73F03E66"
+   ]
+  },
+  "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   }
+  },
+  "BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Description": "AWS CloudFormation handler for \"Custom::S3BucketNotifications\" resources (@aws-cdk/aws-s3)",
+    "Code": {
+     "ZipFile": "import boto3  # type: ignore\nimport json\nimport logging\nimport urllib.request\n\ns3 = boto3.client(\"s3\")\n\nEVENTBRIDGE_CONFIGURATION = 'EventBridgeConfiguration'\nCONFIGURATION_TYPES = [\"TopicConfigurations\", \"QueueConfigurations\", \"LambdaFunctionConfigurations\"]\n\ndef handler(event: dict, context):\n  response_status = \"SUCCESS\"\n  error_message = \"\"\n  try:\n    props = event[\"ResourceProperties\"]\n    notification_configuration = props[\"NotificationConfiguration\"]\n    managed = props.get('Managed', 'true').lower() == 'true'\n    skipDestinationValidation = props.get('SkipDestinationValidation', 'false').lower() == 'true'\n    stack_id = event['StackId']\n    old = event.get(\"OldResourceProperties\", {}).get(\"NotificationConfiguration\", {})\n    if managed:\n      config = handle_managed(event[\"RequestType\"], notification_configuration)\n    else:\n      config = handle_unmanaged(props[\"BucketName\"], stack_id, event[\"RequestType\"], notification_configuration, old)\n    s3.put_bucket_notification_configuration(Bucket=props[\"BucketName\"], NotificationConfiguration=config, SkipDestinationValidation=skipDestinationValidation)\n  except Exception as e:\n    logging.exception(\"Failed to put bucket notification configuration\")\n    response_status = \"FAILED\"\n    error_message = f\"Error: {str(e)}. \"\n  finally:\n    submit_response(event, context, response_status, error_message)\n\ndef handle_managed(request_type, notification_configuration):\n  if request_type == 'Delete':\n    return {}\n  return notification_configuration\n\ndef handle_unmanaged(bucket, stack_id, request_type, notification_configuration, old):\n  def get_id(n):\n    n['Id'] = ''\n    sorted_notifications = sort_filter_rules(n)\n    strToHash=json.dumps(sorted_notifications, sort_keys=True).replace('\"Name\": \"prefix\"', '\"Name\": \"Prefix\"').replace('\"Name\": \"suffix\"', '\"Name\": \"Suffix\"')\n    return f\"{stack_id}-{hash(strToHash)}\"\n  def with_id(n):\n    n['Id'] = get_id(n)\n    return n\n\n  external_notifications = {}\n  existing_notifications = s3.get_bucket_notification_configuration(Bucket=bucket)\n  for t in CONFIGURATION_TYPES:\n    if request_type == 'Update':\n        old_incoming_ids = [get_id(n) for n in old.get(t, [])]\n        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not get_id(n) in old_incoming_ids]      \n    elif request_type == 'Delete':\n        external_notifications[t] = [n for n in existing_notifications.get(t, []) if not n['Id'].startswith(f\"{stack_id}-\")]\n    elif request_type == 'Create':\n        external_notifications[t] = [n for n in existing_notifications.get(t, [])]\n  if EVENTBRIDGE_CONFIGURATION in existing_notifications:\n    external_notifications[EVENTBRIDGE_CONFIGURATION] = existing_notifications[EVENTBRIDGE_CONFIGURATION]\n\n  if request_type == 'Delete':\n    return external_notifications\n\n  notifications = {}\n  for t in CONFIGURATION_TYPES:\n    external = external_notifications.get(t, [])\n    incoming = [with_id(n) for n in notification_configuration.get(t, [])]\n    notifications[t] = external + incoming\n\n  if EVENTBRIDGE_CONFIGURATION in notification_configuration:\n    notifications[EVENTBRIDGE_CONFIGURATION] = notification_configuration[EVENTBRIDGE_CONFIGURATION]\n  elif EVENTBRIDGE_CONFIGURATION in external_notifications:\n    notifications[EVENTBRIDGE_CONFIGURATION] = external_notifications[EVENTBRIDGE_CONFIGURATION]\n\n  return notifications\n\ndef submit_response(event: dict, context, response_status: str, error_message: str):\n  response_body = json.dumps(\n    {\n      \"Status\": response_status,\n      \"Reason\": f\"{error_message}See the details in CloudWatch Log Stream: {context.log_stream_name}\",\n      \"PhysicalResourceId\": event.get(\"PhysicalResourceId\") or event[\"LogicalResourceId\"],\n      \"StackId\": event[\"StackId\"],\n      \"RequestId\": event[\"RequestId\"],\n      \"LogicalResourceId\": event[\"LogicalResourceId\"],\n      \"NoEcho\": False,\n    }\n  ).encode(\"utf-8\")\n  headers = {\"content-type\": \"\", \"content-length\": str(len(response_body))}\n  try:\n    req = urllib.request.Request(url=event[\"ResponseURL\"], headers=headers, data=response_body, method=\"PUT\")\n    with urllib.request.urlopen(req) as response:\n      print(response.read().decode(\"utf-8\"))\n    print(\"Status code: \" + response.reason)\n  except Exception as e:\n      print(\"send(..) failed executing request.urlopen(..): \" + str(e))\n\ndef sort_filter_rules(json_obj):\n  if not isinstance(json_obj, dict):\n      return json_obj\n  for key, value in json_obj.items():\n      if isinstance(value, dict):\n          json_obj[key] = sort_filter_rules(value)\n      elif isinstance(value, list):\n          json_obj[key] = [sort_filter_rules(item) for item in value]\n  if \"Filter\" in json_obj and \"Key\" in json_obj[\"Filter\"] and \"FilterRules\" in json_obj[\"Filter\"][\"Key\"]:\n      filter_rules = json_obj[\"Filter\"][\"Key\"][\"FilterRules\"]\n      sorted_filter_rules = sorted(filter_rules, key=lambda x: x[\"Name\"])\n      json_obj[\"Filter\"][\"Key\"][\"FilterRules\"] = sorted_filter_rules\n  return json_obj"
+    },
+    "Handler": "index.handler",
+    "Role": {
+     "Fn::GetAtt": [
+      "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC",
+      "Arn"
+     ]
+    },
+    "Runtime": "python3.13",
+    "Timeout": 300,
+    "Tags": [
+     {
+      "Key": "env",
+      "Value": "dev"
+     },
+     {
+      "Key": "project",
+      "Value": "spendctl"
+     }
+    ]
+   },
+   "DependsOn": [
+    "BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC"
+   ]
+  }
+ },
+ "Parameters": {
+  "CurTableName": {
+   "Type": "String",
+   "Description": "Glue table name within spendctl_billing created by the manual CUR 2.0 export"
+  },
+  "CurExportPrefix": {
+   "Type": "String",
+   "Default": "cur/",
+   "AllowedPattern": "^[A-Za-z0-9_./-]+$",
+   "Description": "Dedicated object prefix used only by the configured CUR 2.0 export"
+  },
+  "EnableBillingReconciliation": {
+   "Type": "String",
+   "Default": "false",
+   "AllowedValues": [
+    "true",
+    "false"
+   ],
+   "Description": "Explicit opt-in after CUR schema and completeness are verified"
+  },
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Outputs": {
+  "CurExportsBucketName": {
+   "Value": {
+    "Ref": "CurExportsBucket2DD8BCCA"
+   }
+  },
+  "CurExportsBucketArn": {
+   "Value": {
+    "Fn::GetAtt": [
+     "CurExportsBucket2DD8BCCA",
+     "Arn"
+    ]
+   }
+  },
+  "CurExportPrefixValue": {
+   "Value": {
+    "Ref": "CurExportPrefix"
+   }
+  },
+  "AthenaResultsBucketName": {
+   "Value": {
+    "Ref": "AthenaResultsBucket879938FA"
+   }
+  },
+  "BillingGlueDatabaseName": {
+   "Value": "spendctl_billing"
+  },
+  "BillingAthenaWorkgroupName": {
+   "Value": "spendctl-dev-billing"
+  },
+  "BillingReconcilerName": {
+   "Value": {
+    "Ref": "BillingReconcilerFunction0AD097B6"
+   }
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

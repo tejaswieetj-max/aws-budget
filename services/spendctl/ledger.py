@@ -891,14 +891,52 @@ class DynamoLedger:
         else:
             condition += " AND workflow_execution_status = :current_status"
             values[":current_status"] = _encode(current)
-        try:
-            self.db.update_item(
-                TableName=self.reservations,
-                Key=_key(_reservation_key(reservation_id)),
-                UpdateExpression="SET " + ", ".join(updates),
-                ConditionExpression=condition,
-                ExpressionAttributeValues=values,
+        actions = [
+            {
+                "Update": {
+                    "TableName": self.reservations,
+                    "Key": _key(_reservation_key(reservation_id)),
+                    "UpdateExpression": "SET " + ", ".join(updates),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeValues": values,
+                }
+            }
+        ]
+        resource_ids = set(reservation.get("volume_ids") or [])
+        if reservation.get("instance_id"):
+            resource_ids.add(reservation["instance_id"])
+        resource_ids.update(volume_ids or [])
+        if instance_id:
+            resource_ids.add(instance_id)
+        for resource_id in sorted(resource_ids):
+            key = {"pk": f"RESOURCE#{resource_id}", "sk": "MAP"}
+            existing_mapping = self._get_item(self.reservations, key)
+            if existing_mapping:
+                if (
+                    existing_mapping.get("reservation_id") != reservation_id
+                    or existing_mapping.get("team") != reservation["team"]
+                ):
+                    raise ReservationConflict(
+                        f"resource {resource_id} is already mapped to another reservation"
+                    )
+                continue
+            actions.append(
+                self._conditional_put(
+                    self.reservations,
+                    {
+                        "pk": f"RESOURCE#{resource_id}",
+                        "sk": "MAP",
+                        "record_type": "RESOURCE_ATTRIBUTION",
+                        "resource_id": resource_id,
+                        "reservation_id": reservation_id,
+                        "team": reservation["team"],
+                        "created_at": _now(),
+                    },
+                    "attribute_not_exists(pk)",
+                )
             )
+        try:
+            self.db.transact_write_items(TransactItems=actions)
         except ClientError as error:
             if _error_code(error) == "ConditionalCheckFailedException":
                 latest = self.get_reservation(reservation_id)
@@ -908,6 +946,33 @@ class DynamoLedger:
                     return {"reservation": latest, "replayed": True}
                 raise InvalidTransition(
                     "workflow execution outcome changed concurrently"
+                ) from error
+            if _error_code(error) == "TransactionCanceledException":
+                latest = self.get_reservation(reservation_id)
+                mappings_match = True
+                for resource_id in resource_ids:
+                    mapping = self._get_item(
+                        self.reservations, {"pk": f"RESOURCE#{resource_id}", "sk": "MAP"}
+                    )
+                    if mapping and (
+                        mapping.get("reservation_id") != reservation_id
+                        or mapping.get("team") != reservation["team"]
+                    ):
+                        mappings_match = False
+                        break
+                if (
+                    latest.get("workflow_execution_status") == execution_status
+                    and (
+                        cleanup_state is None
+                        or latest.get("workflow_cleanup_state") == cleanup_state
+                    )
+                    and (instance_id is None or latest.get("instance_id") == instance_id)
+                    and (volume_ids is None or latest.get("volume_ids") == volume_ids)
+                    and mappings_match
+                ):
+                    return {"reservation": latest, "replayed": True}
+                raise ReservationConflict(
+                    "resource ID is already mapped to another reservation"
                 ) from error
             if _ambiguous_client_error(error):
                 return self._resolve_workflow_execution_ambiguous(
@@ -1010,6 +1075,7 @@ class DynamoLedger:
         settlement_id: str | None = None,
         settlement_version: int = 1,
         settled_at: str | None = None,
+        billing_reconciliation: dict | None = None,
     ) -> dict:
         """Apply a final settlement version; later versions correct prior actuals."""
         actual = _money(actual_micro, "actual_micro")
@@ -1032,7 +1098,11 @@ class DynamoLedger:
             raise SettlementConflict(
                 f"expected settlement version {current_version + 1}, received {settlement_version}"
             )
-        self._require_open_budget(reservation["team"], reservation["budget_period"])
+        self._require_open_budget(
+            reservation["team"],
+            reservation["budget_period"],
+            allow_closed=current_version > 0,
+        )
         stage = reservation.get("settlement_stage")
         if not stage:
             raise InvalidTransition("final settlement requires provisional settlement first")
@@ -1063,8 +1133,14 @@ class DynamoLedger:
             reservation,
             "SET available_micro = available_micro - :delta, "
             "spent_micro = spent_micro + :delta, version = version + :one, updated_at = :now",
-            "#state = :open",
-            {":delta": delta, ":one": 1, ":open": "OPEN", ":now": now},
+            "#state IN (:open, :closed)" if current_version > 0 else "#state = :open",
+            {
+                ":delta": delta,
+                ":one": 1,
+                ":open": "OPEN",
+                ":now": now,
+                **({":closed": "CLOSED"} if current_version > 0 else {}),
+            },
         )
         if current_version == 0:
             budget_update["Update"]["UpdateExpression"] = (
@@ -1074,41 +1150,95 @@ class DynamoLedger:
                 "version = version + :one, updated_at = :now"
             )
             budget_update["Update"]["ConditionExpression"] += " AND open_reservations >= :one"
-        actions = [
-            {
-                "Update": {
-                    "TableName": self.reservations,
-                    "Key": _key(_reservation_key(reservation_id)),
-                    "UpdateExpression": (
-                        "SET settlement_stage = :final, #state = :settled, "
-                        "final_actual_micro = :actual, final_settlement_id = :sid, "
-                        "settlement_version = :version, settled_at = :now, updated_at = :now"
-                    ),
-                    "ConditionExpression": (
-                        "settlement_stage = :expected_stage AND settlement_version = :previous_version "
-                        "AND #state IN (:expired, :cancelled, :settled)"
-                    ),
-                    "ExpressionAttributeNames": {"#state": "status"},
-                    "ExpressionAttributeValues": {
-                        ":final": _encode("FINAL"),
-                        ":expected_stage": _encode(
-                            "PROVISIONAL" if current_version == 0 else "FINAL"
-                        ),
-                        ":settled": _encode("SETTLED"),
-                        ":actual": _encode(actual),
-                        ":sid": _encode(sid),
-                        ":version": _encode(settlement_version),
-                        ":previous_version": _encode(current_version),
-                        ":expired": _encode("EXPIRED"),
-                        ":cancelled": _encode("CANCELLED"),
-                        ":now": _encode(now),
-                    },
+        released_cleanup_correction = (
+            reservation.get("status") == "RELEASED"
+            and current_version > 0
+            and reservation.get("workflow_cleanup_state") == "COMPLETE"
+        )
+        reservation_values = {
+            ":final": _encode("FINAL"),
+            ":expected_stage": _encode("PROVISIONAL" if current_version == 0 else "FINAL"),
+            ":actual": _encode(actual),
+            ":sid": _encode(sid),
+            ":version": _encode(settlement_version),
+            ":previous_version": _encode(current_version),
+            ":now": _encode(now),
+        }
+        if released_cleanup_correction:
+            reservation_values.update(
+                {":released": _encode("RELEASED"), ":complete": _encode("COMPLETE")}
+            )
+        else:
+            reservation_values.update(
+                {
+                    ":expired": _encode("EXPIRED"),
+                    ":cancelled": _encode("CANCELLED"),
+                    ":settled": _encode("SETTLED"),
                 }
-            },
+            )
+        reservation_update = {
+            "TableName": self.reservations,
+            "Key": _key(_reservation_key(reservation_id)),
+            "UpdateExpression": (
+                "SET settlement_stage = :final, final_actual_micro = :actual, final_settlement_id = :sid, "
+                "settlement_version = :version, settled_at = :now, updated_at = :now"
+            )
+            if released_cleanup_correction
+            else (
+                "SET settlement_stage = :final, #state = :settled, final_actual_micro = :actual, "
+                "final_settlement_id = :sid, settlement_version = :version, settled_at = :now, updated_at = :now"
+            ),
+            "ConditionExpression": (
+                "settlement_stage = :expected_stage AND settlement_version = :previous_version "
+                "AND #state = :released AND workflow_cleanup_state = :complete"
+                if released_cleanup_correction
+                else (
+                    "settlement_stage = :expected_stage AND settlement_version = :previous_version "
+                    "AND #state IN (:expired, :cancelled, :settled)"
+                )
+            ),
+            "ExpressionAttributeNames": {"#state": "status"},
+            "ExpressionAttributeValues": reservation_values,
+        }
+        actions = [
+            {"Update": reservation_update},
             budget_update,
             self._conditional_put(self.reservations, settlement_item, "attribute_not_exists(pk)"),
             self._conditional_put(self.reservations, version_item, "attribute_not_exists(pk)"),
         ]
+        if billing_reconciliation is not None:
+            audit = dict(billing_reconciliation)
+            order = audit["source_revision_order"]
+            actions[0]["Update"]["UpdateExpression"] += (
+                ", billing_source_revision_order = :billing_order"
+            )
+            actions[0]["Update"]["ConditionExpression"] += (
+                " AND (attribute_not_exists(billing_source_revision_order) "
+                "OR billing_source_revision_order < :billing_order)"
+            )
+            actions[0]["Update"]["ExpressionAttributeValues"][":billing_order"] = _encode(order)
+            audit.update(
+                {
+                    "pk": f"BILLING#{audit['reconciliation_id']}",
+                    "sk": "RECONCILIATION",
+                    "record_type": "BILLING_RECONCILIATION",
+                    "reservation_id": reservation_id,
+                    "team": reservation["team"],
+                    "billing_period": audit["billing_period"],
+                    "source_revision": audit["source_revision"],
+                    "source_revision_order": order,
+                    "input_digest": audit["input_digest"],
+                    "previous_actual_micro": previous_cost,
+                    "new_actual_micro": actual,
+                    "adjustment_micro": delta,
+                    "settlement_id": sid,
+                    "settlement_version": settlement_version,
+                    "created_at": now,
+                }
+            )
+            actions.append(
+                self._conditional_put(self.reservations, audit, "attribute_not_exists(pk)")
+            )
         if actual > reservation["reserved_micro"]:
             alert = {
                 "alert_id": f"OVERRUN#{reservation_id}#V#{settlement_version:010d}",
@@ -1143,6 +1273,93 @@ class DynamoLedger:
                 reservation_id, sid, settlement_version, actual, error
             )
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
+    def reconcile_billing(
+        self,
+        reservation_id: str,
+        actual_micro: int,
+        *,
+        reconciliation_id: str,
+        billing_period: str,
+        source_revision: str,
+        source_revision_order: str,
+        input_digest: str,
+        attributed_record_ids: list[str],
+        settled_at: str | None = None,
+    ) -> dict:
+        """Atomically apply a CUR target and persist its immutable audit identity."""
+        actual = _money(actual_micro, "actual_micro")
+        for value, label in (
+            (reconciliation_id, "reconciliation_id"),
+            (billing_period, "billing_period"),
+            (source_revision, "source_revision"),
+            (source_revision_order, "source_revision_order"),
+            (input_digest, "input_digest"),
+        ):
+            _validate_identifier(value, label)
+        audit_key = {"pk": f"BILLING#{reconciliation_id}", "sk": "RECONCILIATION"}
+        existing = self._get_item(self.reservations, audit_key)
+        if existing:
+            if (
+                existing.get("reservation_id") == reservation_id
+                and existing.get("new_actual_micro") == actual
+                and existing.get("billing_period") == billing_period
+                and existing.get("source_revision") == source_revision
+                and existing.get("source_revision_order") == source_revision_order
+                and existing.get("input_digest") == input_digest
+            ):
+                return {
+                    "reservation": self.get_reservation(reservation_id),
+                    "replayed": True,
+                    "audit": existing,
+                }
+            raise SettlementConflict(
+                "billing reconciliation identity was reused with different input"
+            )
+        reservation = self.get_reservation(reservation_id)
+        current_order = reservation.get("billing_source_revision_order")
+        if current_order is not None and source_revision_order <= current_order:
+            raise SettlementConflict("billing source revision is stale or out of order")
+        if reservation.get("settlement_stage") not in {"PROVISIONAL", "FINAL"}:
+            raise InvalidTransition("billing reconciliation requires a provisional settlement")
+        version = reservation.get("settlement_version", 0) + 1
+        sid = f"billing:{reservation_id}:{reconciliation_id}"
+        audit = {
+            "reconciliation_id": reconciliation_id,
+            "billing_period": billing_period,
+            "source_revision": source_revision,
+            "source_revision_order": source_revision_order,
+            "input_digest": input_digest,
+            "attributed_record_ids": sorted(set(attributed_record_ids)),
+        }
+        result = self.final_settle(
+            reservation_id,
+            actual,
+            settlement_id=sid,
+            settlement_version=version,
+            settled_at=settled_at,
+            billing_reconciliation=audit,
+        )
+        persisted = self._get_item(self.reservations, audit_key)
+        if not persisted:
+            raise AmbiguousLedgerOutcome(
+                "billing ledger update committed without readable audit record"
+            )
+        return {**result, "audit": persisted}
+
+    def get_reservation_by_resource(self, resource_id: str) -> dict:
+        """Resolve only an exact, durably recorded EC2/EBS resource identity."""
+        mapping = self._get_item(self.reservations, {"pk": f"RESOURCE#{resource_id}", "sk": "MAP"})
+        if not mapping or mapping.get("record_type") != "RESOURCE_ATTRIBUTION":
+            raise ReservationNotFound(resource_id)
+        reservation = self.get_reservation(mapping["reservation_id"])
+        if reservation.get("team") != mapping.get("team"):
+            raise ReservationConflict("resource mapping team does not match reservation")
+        if resource_id != reservation.get("instance_id") and resource_id not in reservation.get(
+            "volume_ids", []
+        ):
+            raise ReservationConflict("resource mapping is not present in reservation history")
+        return reservation
 
     def get_budget(self, team: str, period: str) -> dict:
         return self._get_item(self.budgets, {"team": team, "period": period}) or {}
@@ -1514,11 +1731,12 @@ class DynamoLedger:
             }
         }
 
-    def _require_open_budget(self, team: str, period: str) -> dict:
+    def _require_open_budget(self, team: str, period: str, *, allow_closed: bool = False) -> dict:
         budget = self.get_budget(team, period)
         if not budget:
             raise BudgetNotFound(f"budget {team}/{period} does not exist")
-        if budget.get("status") != "OPEN":
+        allowed = {"OPEN", "CLOSED"} if allow_closed else {"OPEN"}
+        if budget.get("status") not in allowed:
             raise BudgetClosed(f"budget {team}/{period} is {budget.get('status')}")
         amounts = [
             budget.get(name)

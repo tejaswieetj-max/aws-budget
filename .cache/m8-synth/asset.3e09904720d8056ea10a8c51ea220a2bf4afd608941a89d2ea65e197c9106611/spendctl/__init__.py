@@ -1,0 +1,1 @@
+"""Shared spendctl domain logic."""

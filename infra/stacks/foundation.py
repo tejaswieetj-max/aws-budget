@@ -18,6 +18,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_s3_notifications as s3_notifications
 from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_ssm as ssm
@@ -657,7 +658,9 @@ class OrchestrationStack(Stack):
             },
         )
         record_outcome.role.add_to_policy(
-            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[data_stack.alerts.table_arn])
+            iam.PolicyStatement(
+                actions=["dynamodb:PutItem"], resources=[data_stack.alerts.table_arn]
+            )
         )
         release_prelaunch = make_lambda(
             "release_prelaunch_failure",
@@ -1356,7 +1359,7 @@ class LifecycleStack(Stack):
 
 
 class BillingStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs):
+    def __init__(self, scope: Construct, construct_id: str, *, data_stack, event_bus, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
         Tags.of(self).add("project", "spendctl")
         Tags.of(self).add("env", "dev")
@@ -1402,11 +1405,162 @@ class BillingStack(Stack):
                 ),
             ),
         )
+        cur_table_name = CfnParameter(
+            self,
+            "CurTableName",
+            type="String",
+            description="Glue table name within spendctl_billing created by the manual CUR 2.0 export",
+        )
+        cur_export_prefix = CfnParameter(
+            self,
+            "CurExportPrefix",
+            type="String",
+            default="cur/",
+            allowed_pattern="^[A-Za-z0-9_./-]+$",
+            description="Dedicated object prefix used only by the configured CUR 2.0 export",
+        )
+        reconciliation_enabled = CfnParameter(
+            self,
+            "EnableBillingReconciliation",
+            type="String",
+            default="false",
+            allowed_values=["true", "false"],
+            description="Explicit opt-in after CUR schema and completeness are verified",
+        )
+        function_name = "spendctl-dev-m8-billing-reconciler"
+        log_group = logs.LogGroup(
+            self,
+            "BillingReconcilerLogGroup",
+            log_group_name=f"/aws/lambda/{function_name}",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        role = iam.Role(
+            self,
+            "BillingReconcilerRole",
+            role_name="spendctl-dev-m8-billing-reconciler-role",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources=[f"{log_group.log_group_arn}:*"],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=[f"{self.cur_bucket.bucket_arn}/{cur_export_prefix.value_as_string}*"],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetBucketLocation", "s3:ListBucket"],
+                resources=[self.cur_bucket.bucket_arn],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload"],
+                resources=[f"{self.athena_results_bucket.bucket_arn}/results/*"],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetBucketLocation", "s3:ListBucket"],
+                resources=[self.athena_results_bucket.bucket_arn],
+            )
+        )
+        workgroup_arn = f"arn:{self.partition}:athena:{self.region}:{self.account}:workgroup/{self.athena_workgroup.name}"
+        role.add_to_policy(
+            iam.PolicyStatement(actions=["athena:StartQueryExecution"], resources=[workgroup_arn])
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["athena:GetQueryExecution", "athena:GetQueryResults"],
+                resources=["*"],
+            )
+        )
+        database_arn = (
+            f"arn:{self.partition}:glue:{self.region}:{self.account}:database/spendctl_billing"
+        )
+        table_arn = f"arn:{self.partition}:glue:{self.region}:{self.account}:table/spendctl_billing/{cur_table_name.value_as_string}"
+        catalog_arn = f"arn:{self.partition}:glue:{self.region}:{self.account}:catalog"
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "glue:GetDatabase",
+                    "glue:GetTables",
+                    "glue:GetTable",
+                    "glue:GetPartitions",
+                ],
+                resources=[catalog_arn, database_arn, table_arn],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:TransactWriteItems",
+                ],
+                resources=[
+                    data_stack.budgets.table_arn,
+                    data_stack.reservations.table_arn,
+                    data_stack.alerts.table_arn,
+                ],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(actions=["events:PutEvents"], resources=[event_bus.event_bus_arn])
+        )
+        reconciler = lambda_.Function(
+            self,
+            "BillingReconcilerFunction",
+            function_name=function_name,
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="spendctl.billing_handlers.billing_manifest_handler",
+            code=lambda_.Code.from_asset(str(Path(__file__).resolve().parents[2] / "services")),
+            role=role,
+            memory_size=512,
+            timeout=Duration.minutes(5),
+            environment={
+                "CUR_EXPORT_BUCKET": self.cur_bucket.bucket_name,
+                "CUR_EXPORT_PREFIX": cur_export_prefix.value_as_string,
+                "CUR_TABLE": cur_table_name.value_as_string,
+                "ATHENA_WORKGROUP": self.athena_workgroup.name,
+                "ATHENA_RESULTS_BUCKET": self.athena_results_bucket.bucket_name,
+                "BUDGETS_TABLE": data_stack.budgets.table_name,
+                "RESERVATIONS_TABLE": data_stack.reservations.table_name,
+                "ALERTS_TABLE": data_stack.alerts.table_name,
+                "EVENT_BUS_NAME": event_bus.event_bus_name,
+                "BILLING_RECONCILIATION_ENABLED": reconciliation_enabled.value_as_string,
+                "CUR_FINALIZATION_DELAY_DAYS": "60",
+                "ATHENA_QUERY_TIMEOUT_SECONDS": "240",
+            },
+        )
+        self.cur_bucket.add_event_notification(
+            s3.EventType.OBJECT_CREATED,
+            s3_notifications.LambdaDestination(reconciler),
+            s3.NotificationKeyFilter(
+                prefix=cur_export_prefix.value_as_string, suffix="Manifest.json"
+            ),
+        )
+        self.cur_bucket.add_event_notification(
+            s3.EventType.OBJECT_CREATED,
+            s3_notifications.LambdaDestination(reconciler),
+            s3.NotificationKeyFilter(
+                prefix=cur_export_prefix.value_as_string, suffix="manifest.json"
+            ),
+        )
         CfnOutput(self, "CurExportsBucketName", value=self.cur_bucket.bucket_name)
         CfnOutput(self, "CurExportsBucketArn", value=self.cur_bucket.bucket_arn)
+        CfnOutput(self, "CurExportPrefixValue", value=cur_export_prefix.value_as_string)
         CfnOutput(self, "AthenaResultsBucketName", value=self.athena_results_bucket.bucket_name)
         CfnOutput(self, "BillingGlueDatabaseName", value="spendctl_billing")
         CfnOutput(self, "BillingAthenaWorkgroupName", value=self.athena_workgroup.name)
+        CfnOutput(self, "BillingReconcilerName", value=reconciler.function_name)
 
 
 class WebStack(Stack):

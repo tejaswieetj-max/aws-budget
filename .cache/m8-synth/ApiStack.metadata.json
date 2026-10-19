@@ -1,0 +1,975 @@
+{
+  "/ApiStack": [
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    },
+    {
+      "type": "aws:cdk:stack-tags",
+      "data": [
+        {
+          "key": "env",
+          "value": "dev"
+        },
+        {
+          "key": "project",
+          "value": "spendctl"
+        }
+      ]
+    }
+  ],
+  "/ApiStack/CloudFrontOrigin": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CloudFrontOrigin"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/DefaultStage": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DefaultStage"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/ApiUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApiUrl"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/BootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "BootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/CheckBootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CheckBootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/estimateLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "estimateLogGroup8C2EF407"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/estimateRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "estimateRole73BE8A39"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/estimateFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "estimateFunction86A98526"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/create_requestLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "createrequestLogGroup82CB036C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/create_requestRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "createrequestRole1943EB6B"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/create_requestFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "createrequestFunctionD9F07246"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_requestLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getrequestLogGroup775CAB81"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_requestRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getrequestRoleD79A7B15"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_requestFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getrequestFunctionD79EDA69"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/cancel_requestLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "cancelrequestLogGroup471B4001"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/cancel_requestRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "cancelrequestRole384E5207"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/cancel_requestFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "cancelrequestFunctionF63264C3"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_reservationsLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listreservationsLogGroupAE6533AA"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_reservationsRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listreservationsRoleD6542F23"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_reservationsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listreservationsFunction60C47C6A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_budgetLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getbudgetLogGroupE32ABA30"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_budgetRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getbudgetRoleD8B2A5EC"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_budgetFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getbudgetFunction6512833D"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/put_budgetLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "putbudgetLogGroup1E7825CD"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/put_budgetRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "putbudgetRole6DA38D7A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/put_budgetFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "putbudgetFunctionA22567AD"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/calibration_summaryLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "calibrationsummaryLogGroup07B042BC"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/calibration_summaryRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "calibrationsummaryRole5BCC384F"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/calibration_summaryFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "calibrationsummaryFunction5856B033"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_alertsLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listalertsLogGroupC857A753"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_alertsRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listalertsRoleA644E595"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_alertsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listalertsFunctionD6DB66CC"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/ApiAccessLogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApiAccessLogGroupCEA70788"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApi388D54BB"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime, node internals...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/estimateRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "estimateRoleDefaultPolicy70F5E9DE"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/create_requestRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "createrequestRoleDefaultPolicy0720F3CF"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_requestRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getrequestRoleDefaultPolicyB424393D"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/cancel_requestRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "cancelrequestRoleDefaultPolicy17E9E6B5"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_reservationsRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listreservationsRoleDefaultPolicy6BC36324"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/get_budgetRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "getbudgetRoleDefaultPolicy39913734"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/put_budgetRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "putbudgetRoleDefaultPolicy7BA03D41"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/calibration_summaryRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "calibrationsummaryRoleDefaultPolicy0E58E37E"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/list_alertsRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "listalertsRoleDefaultPolicyA343DB3D"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, jsii runtime...",
+        "(no user code in 10 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--estimate/estimateIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1estimateestimateIntegrationPermissionEBEA6459"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--estimate/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1estimate0028F236"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/SpendctlCognitoAuthorizer/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiSpendctlCognitoAuthorizer44AFFA1E"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests/create_requestIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requestscreaterequestIntegrationPermission2594B45C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requests31C2CE33"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--requests--{id}/get_requestIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1requestsidgetrequestIntegrationPermissionD776A748"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--requests--{id}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1requestsid6DB6A2F0"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests--{id}--cancel/cancel_requestIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requestsidcancelcancelrequestIntegrationPermission84D16BFA"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests--{id}--cancel/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requestsidcancel3372EB5F"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--reservations/list_reservationsIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1reservationslistreservationsIntegrationPermissionC6EDFC56"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--reservations/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1reservations6D8CAF93"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--budgets--{team}/get_budgetIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1budgetsteamgetbudgetIntegrationPermission38649E06"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--budgets--{team}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1budgetsteamE6AF0B47"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/PUT--v1--budgets--{team}/put_budgetIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPUTv1budgetsteamputbudgetIntegrationPermissionA1D40927"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/PUT--v1--budgets--{team}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPUTv1budgetsteam2AD4ECCB"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--calibration--summary/calibration_summaryIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1calibrationsummarycalibrationsummaryIntegrationPermission5311E6A5"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--calibration--summary/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1calibrationsummary54B99A54"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--alerts/list_alertsIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1alertslistalertsIntegrationPermission364FACB8"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--alerts/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1alerts511C468A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--estimate/estimateIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1estimateestimateIntegration08F43688"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests/create_requestIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requestscreaterequestIntegration17FA3D76"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--requests--{id}/get_requestIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1requestsidgetrequestIntegrationFC75B504"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/POST--v1--requests--{id}--cancel/cancel_requestIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPOSTv1requestsidcancelcancelrequestIntegration7FC70128"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--reservations/list_reservationsIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1reservationslistreservationsIntegration9D95C505"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--budgets--{team}/get_budgetIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1budgetsteamgetbudgetIntegration82DCE69A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/PUT--v1--budgets--{team}/put_budgetIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiPUTv1budgetsteamputbudgetIntegrationB8DED314"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--calibration--summary/calibration_summaryIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1calibrationsummarycalibrationsummaryIntegration712B85F3"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ],
+  "/ApiStack/SpendctlApi/GET--v1--alerts/list_alertsIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "SpendctlApiGETv1alertslistalertsIntegration2E596751"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../var/folders/l7/s_n36g9j14n30g4wdrw4579c0000gn/T/jsii-kernel-iE8FgV/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...aws-cdk-lib, jsii runtime..."
+      ]
+    }
+  ]
+}
