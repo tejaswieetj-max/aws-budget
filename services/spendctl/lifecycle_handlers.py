@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 import boto3
@@ -38,15 +39,41 @@ def state_change_handler(event, context):
 
 
 def bypass_handler(event, context):
-    return inspect_bypass_event(
+    result = inspect_bypass_event(
         event, ledger=_ledger(), provisioner_role_arn=_required_env("PROVISIONER_ROLE_ARN")
     )
+    if result.get("state") == "ALERTED":
+        response = boto3.client("events", region_name=_region()).put_events(
+            Entries=[
+                {
+                    "EventBusName": _required_env("EVENT_BUS_NAME"),
+                    "Source": "spendctl.lifecycle",
+                    "DetailType": "BypassDetected",
+                    "Detail": json.dumps(
+                        {
+                            "event_id": result["event_id"],
+                            "schema_version": 1,
+                            "occurred_at": event.get("time"),
+                            "cloudtrail_event_id": result["event_id"],
+                        },
+                        sort_keys=True,
+                    ),
+                }
+            ]
+        )
+        if response.get("FailedEntryCount", 0):
+            raise RuntimeError("failed to publish BypassDetected event")
+    return result
 
 
 def orphan_audit_handler(event, context):
     ledger = _ledger()
     ec2 = boto3.client("ec2", region_name=_region())
-    filters = [{"Name": "tag:managed-by", "Values": ["spend-controller"]}]
+    filters = [
+        {"Name": "tag:managed-by", "Values": ["spend-controller"]},
+        {"Name": "tag:project", "Values": ["spendctl"]},
+        {"Name": "tag:env", "Values": ["dev"]},
+    ]
     instances = _describe_pages(ec2.describe_instances, "Reservations", filters=filters)
     flattened = [instance for row in instances for instance in row.get("Instances", [])]
     volumes = _describe_pages(ec2.describe_volumes, "Volumes", filters=filters)

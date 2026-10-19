@@ -120,8 +120,12 @@ workflow-start and reconciliation permissions are listed under M6 below.
 
 M5 request creation starts M6 after M4 confirms the durable hold. The starter
 persists execution identity before the Step Functions call and records the ARN.
-Cancellation is read-only and returns `CANCELLATION_UNSUPPORTED` (501) until M7
-cleanup is implemented. Unknown admission or start outcomes map to 503
+Cancellation now conditionally records `ACTIVE -> CANCELLED` and asynchronously
+dispatches M7 cleanup; it returns 202 with cleanup pending. The hold remains
+reserved until tagged termination and volume cleanup are confirmed, then the
+entire reserve becomes provisional spend pending M8 billing corrections. A
+HELD reservation or any request with an uncertain start cannot be cancelled.
+Unknown admission or start outcomes map to 503
 `PENDING_UNKNOWN` with the reservation id and reconciliation instruction.
 Calibration
 summaries use only final, attributed, identified persisted `CostSamples`; alerts are read from
@@ -140,3 +144,48 @@ tested or template-inspected only. The state machine does not create an expiry
 schedule; that integration belongs to M7. Live IAM evaluation, private subnet
 routing, no-ingress security-group configuration, SSM AMI resolution and EC2
 lifecycle behavior remain unverified.
+
+## M7 lifecycle, cancellation and expiry
+
+After the M6 activation callback durably transitions the reservation to ACTIVE,
+it creates a deterministic one-time EventBridge Scheduler schedule at the
+ledger expiry, with a constrained Scheduler role targeting the reaper Lambda.
+An EventBridge rule also invokes the reaper every five minutes to recover missed
+schedules and retry CANCELLED/EXPIRED cleanup. The status/expiry GSI is queried
+for due ACTIVE rows; DynamoDB TTL is not used for scheduling. Cancellation first
+uses the conditional M2 `ACTIVE -> CANCELLED` transition and dispatches the
+reaper asynchronously. Duplicate API requests and schedule/sweeper deliveries
+reuse reservation-scoped event IDs; EC2 termination/deletion is repeated only
+for the exact ledger instance and recorded volumes, and the provisional
+settlement ID is stable.
+
+Before termination, the reaper reads the reservation-bound instance ID and
+verifies project, environment, managed-by, reservation-id and team tags. It
+deletes only ledger-bound volumes after the owned instance is terminated and
+the volume is detached/available. Missing or contradictory evidence creates a
+stable alert and leaves the hold uncommitted; no unknown resource is deleted.
+Once cleanup is confirmed, the M7 provisional settlement moves the entire
+reserved amount to provisional spend, preserving
+`available_micro + reserved_micro + spent_micro = budget_micro`. It does not
+claim actual billing; M8 must correct the provisional amount. Cleanup failure
+or unknown workflow state never releases funds.
+
+The safety sweeper retries HELD STARTING/UNKNOWN/STARTED workflows using the
+same execution name only after a tag-scoped resource check. If a resource is
+already present while execution state is unclear, it alerts and stops. Terminal
+failed executions with possible resources receive tag-scoped cleanup but remain
+held unless durable pre-launch `NOT_CREATED` evidence authorizes release. EC2
+state-change events update instance timestamps monotonically, ignoring older
+events. A CloudTrail RunInstances detector persists and publishes bypass alerts;
+a daily read-only audit flags unmatched tagged instances/volumes and never
+deletes them. Scheduler delivery, CloudTrail availability, IAM condition keys,
+and resource behavior remain live-verification assumptions.
+
+Expiry publication is marked in the reservation only after EventBridge accepts
+the stable event. The periodic sweeper retries publication after cleanup and
+provisional settlement, so an event delivery error cannot strand the expiry
+notification. Cancellation does not delete the one-time expiry schedule; it
+may invoke the reaper once more at the original expiry, where terminal-state
+and settlement checks make the replay harmless. The schedule self-deletes after
+that invocation. A dedicated DLQ is not configured; periodic reconciliation
+and Lambda asynchronous retry behavior are the recovery mechanisms.

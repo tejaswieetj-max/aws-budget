@@ -39,10 +39,16 @@ are restricted to the caller's team. Admin budget creation may target a team.
   the same key so M6 can reconcile the same execution name and input.
 - `GET /v1/requests/{id}` returns `{ "request": <reservation> }` for the caller's
   team or the standard 404 error envelope.
-- `POST /v1/requests/{id}/cancel` currently returns 501 with
-  `CANCELLATION_UNSUPPORTED` after verifying the reservation belongs to the
-  caller's team. It does not mutate the reservation or release funds; lifecycle
-  cleanup must exist before cancellation can be enabled.
+- `POST /v1/requests/{id}/cancel` is team-scoped and accepts only ACTIVE
+  reservations. It conditionally transitions ACTIVE to CANCELLED, then
+  asynchronously dispatches the tag-verified reaper and returns 202 with the
+  updated request and `cleanup_state: PENDING`. Repeating the request is
+  idempotent and dispatches the same stable lifecycle event identity. HELD,
+  RELEASED, and SETTLED requests return 409 `REQUEST_NOT_ACTIVE`; a HELD request
+  with an uncertain workflow is never cancelled or released by this route.
+  Cancellation does not immediately release the budget hold. The reaper only
+  moves the full reserved amount to provisional spend after termination and
+  volume cleanup are verified; M8 billing reconciliation may later correct it.
 - `GET /v1/reservations` defaults `team` to the trusted claim; supplying another
   team is denied. Optional `status`, `limit` (1–100), and opaque `nextToken`
   query parameters are supported. Response is `{ "items": [...], "nextToken":
@@ -76,9 +82,11 @@ Gateway authorizer-generated 401/403 responses use the same error envelope.
 Handler tests use simulated API Gateway authorizer claims and Moto/fake service
 responses. They do not verify JWT signatures, Cognito issuer/audience behavior,
 API Gateway routing/CORS/throttling, IAM evaluation, or real DynamoDB behavior.
-M6's Step Functions definition and EC2 request shape are locally synthesized and
-mock-tested only; no state machine, Lambda, IAM policy, subnet, security group,
-AMI resolution, or EC2 launch has been verified in AWS.
+M6's Step Functions definition and EC2 request shape and M7 EventBridge/Scheduler
+rules are locally synthesized and mock-tested only; no state machine, Lambda,
+IAM policy evaluation, schedule delivery, CloudTrail integration, subnet,
+security group, AMI resolution, EC2 launch/termination, volume deletion, or
+orphan audit has been verified in AWS.
 The CDK stack configures Cognito authorization, regional API Gateway, local
 development CORS (`http://localhost:5173`), stage throttling (20 requests/sec,
 burst 40), Python 3.12 Lambdas (256 MB, 10 seconds), and one narrowly scoped

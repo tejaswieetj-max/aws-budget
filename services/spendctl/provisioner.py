@@ -280,8 +280,8 @@ def find_reservation_resources(event: dict, *, ec2: Any) -> dict:
         {"Name": "tag:project", "Values": [PROJECT_TAGS["project"]]},
         {"Name": "tag:env", "Values": [PROJECT_TAGS["env"]]},
     ]
-    instances = _describe_pages(ec2.describe_instances, "Reservations", filters=filters)
-    volumes = _describe_pages(ec2.describe_volumes, "Volumes", filters=filters)
+    instances = _describe_pages(ec2.describe_instances, "Reservations", Filters=filters)
+    volumes = _describe_pages(ec2.describe_volumes, "Volumes", Filters=filters)
     flattened_instances = [
         instance for row in instances for instance in row.get("Instances", [])
     ]

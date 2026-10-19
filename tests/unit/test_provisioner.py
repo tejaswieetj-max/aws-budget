@@ -180,6 +180,7 @@ def test_poll_and_cleanup_are_tag_scoped_and_idempotent():
         "tag:reservation-id": EVENT["reservation_id"],
         "tag:team": "alpha",
         "tag:project": "spendctl",
+        "tag:env": "dev",
     }
     assert ("terminate_instances", {"InstanceIds": ["i-123"]}) in ec2.calls
     assert ("delete_volume", {"VolumeId": "vol-123"}) in ec2.calls

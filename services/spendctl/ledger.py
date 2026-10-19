@@ -1147,6 +1147,44 @@ class DynamoLedger:
             )
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
 
+    def mark_expiry_event_published(self, reservation_id: str, event_id: str) -> dict:
+        """Persist successful publication evidence for the stable expiry event."""
+        reservation = self.get_reservation(reservation_id)
+        if reservation.get("status") != "EXPIRED" or reservation.get("settlement_stage") != "PROVISIONAL":
+            raise InvalidTransition("expiry event requires completed expiry and provisional settlement")
+        if reservation.get("expiry_event_published"):
+            if reservation.get("expiry_event_id") != event_id:
+                raise ReservationConflict("expiry event identity is immutable")
+            return {"reservation": reservation, "replayed": True}
+        try:
+            self.db.update_item(
+                TableName=self.reservations,
+                Key=_key(_reservation_key(reservation_id)),
+                UpdateExpression=(
+                    "SET expiry_event_published = :yes, expiry_event_id = :event_id, updated_at = :now"
+                ),
+                ConditionExpression=(
+                    "#state = :expired AND settlement_stage = :provisional "
+                    "AND attribute_not_exists(expiry_event_published)"
+                ),
+                ExpressionAttributeNames={"#state": "status"},
+                ExpressionAttributeValues={
+                    ":yes": _encode(True),
+                    ":event_id": _encode(event_id),
+                    ":now": _encode(_now()),
+                    ":expired": _encode("EXPIRED"),
+                    ":provisional": _encode("PROVISIONAL"),
+                },
+            )
+        except ClientError as error:
+            if _error_code(error) == "ConditionalCheckFailedException":
+                latest = self.get_reservation(reservation_id)
+                if latest.get("expiry_event_published") and latest.get("expiry_event_id") == event_id:
+                    return {"reservation": latest, "replayed": True}
+                raise InvalidTransition("expiry event publication state changed concurrently") from error
+            raise
+        return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
     def record_instance_state(
         self, reservation_id: str, *, instance_id: str, state: str, occurred_at: str
     ) -> dict:

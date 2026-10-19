@@ -1047,7 +1047,9 @@ class LifecycleStack(Stack):
             iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[alerts_arn])
         )
         self.reaper_role.add_to_policy(
-            iam.PolicyStatement(actions=["sts:AssumeRole"], resources=[provisioner_role_arn])
+            iam.PolicyStatement(
+                actions=["sts:AssumeRole", "sts:TagSession"], resources=[provisioner_role_arn]
+            )
         )
         self.reaper_role.add_to_policy(
             iam.PolicyStatement(actions=["states:StartExecution", "states:ListExecutions"], resources=[machine_arn])
@@ -1081,6 +1083,12 @@ class LifecycleStack(Stack):
             ["dynamodb:PutItem"],
             [alerts_arn],
             {**table_env, "PROVISIONER_ROLE_ARN": provisioner_role_arn},
+        )
+        self.bypass_detector_role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[reservations_arn])
+        )
+        self.bypass_detector_role.add_to_policy(
+            iam.PolicyStatement(actions=["events:PutEvents"], resources=[self.event_bus.event_bus_arn])
         )
         self.orphan_auditor, self.orphan_auditor_role = function(
             "orphan_auditor",

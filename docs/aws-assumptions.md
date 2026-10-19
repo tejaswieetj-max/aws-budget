@@ -9,6 +9,7 @@ No AWS account was queried and no AWS resources were created. The following rema
 - The configured subnet has no NAT route, the configured security group has no ingress, the regional SSM Amazon Linux 2023 parameter resolves to an approved AMI, and EC2 applies the requested instance/volume tag specifications and cleanup semantics.
 - Regional availability/quotas for all required services, credits, and budget notification state.
 - CDK synthesis/deployment, Cognito callback and hosted UI URLs, CloudFront OAC, alarm delivery and SNS confirmation.
+- M7 EventBridge Scheduler one-time schedule delivery/retries and deletion after completion; EventBridge event bus delivery; CloudTrail `RunInstances` event availability; role trust and session tag propagation for the lifecycle reaper's scoped provisioner-role assumption; live Lambda timeout behavior during paginated cleanup; and EC2 `Describe`/`Terminate`/EBS delete outcomes under the synthesized IAM policies.
 - Any live pricing, billing, latency, or cleanup behavior.
 
 Each item must be verified with actual account queries and evidence recorded in `docs/verify-log.md`. AWS deployment, EC2 launches, billing configuration, account budget changes, and destructive cleanup require explicit approval.
