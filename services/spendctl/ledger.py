@@ -581,10 +581,22 @@ class DynamoLedger:
             or reservation.get("workflow_execution_status")
             not in {"FAILED", "TIMED_OUT", "ABORTED"}
             or reservation.get("workflow_cleanup_state") != "COMPLETE"
+            or reservation.get("workflow_start_state") != "STARTED"
+            or reservation.get("workflow_launch_state") not in {"CREATED", "NOT_CREATED"}
         ):
             raise InvalidTransition(
-                "budget restoration requires failed execution and confirmed COMPLETE cleanup"
+                "budget restoration requires failed execution, confirmed launch outcome, and COMPLETE cleanup"
             )
+        if reservation["workflow_launch_state"] == "CREATED" and (
+            not reservation.get("instance_id") or not reservation.get("launched_at")
+        ):
+            raise InvalidTransition("created launch is missing runtime identity or launch time")
+        if reservation["workflow_launch_state"] == "NOT_CREATED" and actual != 0:
+            raise SettlementConflict("a confirmed non-created launch must have zero actual cost")
+        if reservation["workflow_launch_state"] == "NOT_CREATED" and (
+            reservation.get("instance_id") or reservation.get("volume_ids")
+        ):
+            raise InvalidTransition("NOT_CREATED launch has persisted resource identities")
         reserve = _money(reservation.get("reserved_micro"), "reserved_micro")
         if actual > reserve:
             raise SettlementConflict(
@@ -618,7 +630,9 @@ class DynamoLedger:
                     ),
                     "ConditionExpression": (
                         "#state IN (:held, :active) AND workflow_execution_status IN (:failed, :timeout, :aborted) "
-                        "AND workflow_cleanup_state = :complete AND attribute_not_exists(final_settlement_id)"
+                        "AND workflow_cleanup_state = :complete AND workflow_start_state = :started "
+                        "AND workflow_launch_state IN (:created, :not_created) "
+                        "AND attribute_not_exists(final_settlement_id)"
                     ),
                     "ExpressionAttributeNames": {"#state": "status"},
                     "ExpressionAttributeValues": {
@@ -634,6 +648,9 @@ class DynamoLedger:
                         ":timeout": _encode("TIMED_OUT"),
                         ":aborted": _encode("ABORTED"),
                         ":complete": _encode("COMPLETE"),
+                        ":started": _encode("STARTED"),
+                        ":created": _encode("CREATED"),
+                        ":not_created": _encode("NOT_CREATED"),
                     },
                 }
             },

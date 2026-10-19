@@ -8,13 +8,16 @@ from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_apigatewayv2 as apigatewayv2
 from aws_cdk import aws_apigatewayv2_authorizers as apigatewayv2_authorizers
 from aws_cdk import aws_apigatewayv2_integrations as apigatewayv2_integrations
+from aws_cdk import aws_athena as athena
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as event_targets
+from aws_cdk import aws_glue as glue
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_ssm as ssm
@@ -1353,7 +1356,57 @@ class LifecycleStack(Stack):
 
 
 class BillingStack(Stack):
-    pass
+    def __init__(self, scope: Construct, construct_id: str, **kwargs):
+        super().__init__(scope, construct_id, **kwargs)
+        Tags.of(self).add("project", "spendctl")
+        Tags.of(self).add("env", "dev")
+        self.cur_bucket = s3.Bucket(
+            self,
+            "CurExportsBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(365))],
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.athena_results_bucket = s3.Bucket(
+            self,
+            "AthenaResultsBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(30))],
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.glue_database = glue.CfnDatabase(
+            self,
+            "BillingGlueDatabase",
+            catalog_id=self.account,
+            database_input=glue.CfnDatabase.DatabaseInputProperty(name="spendctl_billing"),
+        )
+        self.athena_workgroup = athena.CfnWorkGroup(
+            self,
+            "BillingAthenaWorkgroup",
+            name="spendctl-dev-billing",
+            state="ENABLED",
+            recursive_delete_option=False,
+            work_group_configuration=athena.CfnWorkGroup.WorkGroupConfigurationProperty(
+                enforce_work_group_configuration=True,
+                publish_cloud_watch_metrics_enabled=True,
+                bytes_scanned_cutoff_per_query=1_073_741_824,
+                result_configuration=athena.CfnWorkGroup.ResultConfigurationProperty(
+                    output_location=f"s3://{self.athena_results_bucket.bucket_name}/results/",
+                    encryption_configuration=athena.CfnWorkGroup.EncryptionConfigurationProperty(
+                        encryption_option="SSE_S3"
+                    ),
+                ),
+            ),
+        )
+        CfnOutput(self, "CurExportsBucketName", value=self.cur_bucket.bucket_name)
+        CfnOutput(self, "CurExportsBucketArn", value=self.cur_bucket.bucket_arn)
+        CfnOutput(self, "AthenaResultsBucketName", value=self.athena_results_bucket.bucket_name)
+        CfnOutput(self, "BillingGlueDatabaseName", value="spendctl_billing")
+        CfnOutput(self, "BillingAthenaWorkgroupName", value=self.athena_workgroup.name)
 
 
 class WebStack(Stack):

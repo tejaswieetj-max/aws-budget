@@ -31,6 +31,30 @@ Settlement records are deduplicated by immutable settlement version/id and sorte
 
 All backend amounts are integer micro-USD and round upward. The estimator's gp3 monthly price uses a 730-hour month. Pricing, data transfer, taxes, credits, refunds, discounts, and T3 CPU-credit behavior need live verification; fixture/fallback values are never called live. No real billing results are supplied in this repo.
 
+PriceCache stores each provider SKU under `sku_key` for seven days and retains
+the fetch timestamp with the unit rate. The estimate snapshot ID identifies the
+configuration and rates used; the reservation stores both that ID and the
+fetched-at timestamp. When Price List lookup fails, an explicit
+`fallback_unverified` rate table is used and logged. The fallback is never
+labelled live and remains an unverified budgeting fallback.
+
+Confirmed workflow-failure runtime cost uses the persisted snapshot's compute
+and gp3 rates with the recorded launch and cleanup-completion times. Created
+instances have a 60-second compute billing minimum; EBS is prorated by elapsed
+seconds using the existing 730-hour month assumption. This is a local estimate
+until M8 billing reconciliation supplies attributable actual cost.
+
+M1 hosted UI keeps localhost callback/logout URLs in every environment; an
+optional `cloudfront_url` CDK context value appends production callback/logout
+URLs. The hosted UI domain prefix is a deployment parameter. ProvisionerRole's
+permissions boundary permits only EC2 actions in `ap-south-1`; the role's
+resource policy remains the narrower operation/tag policy. Caller permission
+for `sts:TagSession` is intentionally left for the M1 verification to prove.
+
+M8 groundwork creates storage/catalog/query infrastructure only. Cost and
+Usage Data Export creation remains a manual, separately approved account step
+so its actual export identity, delivery policy and schema can be verified.
+
 ## Crash-safe workflow start
 
 Persist the deterministic Standard Workflow execution name on the confirmed `HELD` reservation before calling `StartExecution`. The name is derived from the reservation ID, and the JSON input is built only from the durable reservation. An ambiguous timeout or failed `ListExecutions`/`DescribeExecution` remains `UNKNOWN`; do not release or start a differently named execution. Retrying the same admission key reuses the same name and input. A duplicate name is accepted only after its stored input is checked; a mismatch remains unresolved. A conclusive Step Functions rejection followed by successful reconciliation with no execution is recorded as start `FAILED` and permits an idempotent hold release. A provisioning failure after an execution started is recorded separately from start failure.

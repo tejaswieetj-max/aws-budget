@@ -80,10 +80,35 @@ def record_workflow_outcome_handler(event, context):
                 },
             )
             return {"reservation": reservation, "released": False, "state": "HELD_UNKNOWN"}
-        try:
-            actual_micro = _confirmed_failure_actual(
-                reservation, bool(event.get("had_resources")), terminated_at
+        launch_state = reservation.get("workflow_launch_state")
+        if (
+            reservation.get("workflow_start_state") != "STARTED"
+            or launch_state
+            not in {
+                "CREATED",
+                "NOT_CREATED",
+            }
+            or (
+                launch_state == "CREATED"
+                and (not reservation.get("instance_id") or not reservation.get("launched_at"))
             )
+        ):
+            ledger.record_alert(
+                alert_id=f"LAUNCH_OUTCOME_UNKNOWN#{reservation_id}",
+                alert_type="WorkflowCleanupUncertain",
+                details={
+                    "reservation_id": reservation_id,
+                    "launch_state": launch_state or "UNKNOWN",
+                },
+            )
+            return {"reservation": reservation, "released": False, "state": "HELD_UNKNOWN"}
+        try:
+            had_resources = bool(
+                event.get("had_resources")
+                or reservation.get("instance_id")
+                or launch_state == "CREATED"
+            )
+            actual_micro = _confirmed_failure_actual(reservation, had_resources, terminated_at)
         except (KeyError, ValueError, TypeError):
             ledger.record_alert(
                 alert_id=f"CLEANUP_COST_UNKNOWN#{reservation_id}",

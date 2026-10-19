@@ -240,7 +240,7 @@ def test_prelaunch_workflow_failure_release_requires_durable_no_resource_evidenc
     assert budget["reserved_micro"] == 0
 
 
-def _failed_cleanup(ledger, rid, *, cleanup="COMPLETE", resources=True):
+def _failed_cleanup(ledger, rid, *, cleanup="COMPLETE", resources=True, launch_state=None):
     reserve(ledger, reservation_id=rid, key=f"key-{rid}")
     ledger.set_workflow_start_state(rid, "STARTING", execution_name=f"wf-{rid}")
     ledger.set_workflow_start_state(
@@ -254,7 +254,8 @@ def _failed_cleanup(ledger, rid, *, cleanup="COMPLETE", resources=True):
         rid,
         execution_status="FAILED",
         cleanup_state=cleanup,
-        launch_state="CREATED" if resources else "NOT_CREATED",
+        launch_state=launch_state or ("CREATED" if resources else "NOT_CREATED"),
+        instance_id="i-test" if resources else None,
         launched_at="2026-10-19T10:00:00Z" if resources else None,
         terminated_at="2026-10-19T10:00:30Z" if cleanup == "COMPLETE" else None,
     )
@@ -290,8 +291,17 @@ def test_confirmed_cleanup_without_any_instance_restores_full_reserve(ledger):
 @pytest.mark.parametrize("cleanup", ["PENDING", "UNKNOWN"])
 def test_partial_or_unknown_cleanup_never_refunds(ledger, cleanup):
     _failed_cleanup(ledger, f"r-{cleanup.lower()}", cleanup=cleanup)
-    with pytest.raises(InvalidTransition, match="confirmed COMPLETE cleanup"):
+    with pytest.raises(InvalidTransition, match="COMPLETE cleanup"):
         ledger.release_after_confirmed_cleanup(f"r-{cleanup.lower()}", 0)
+    budget = assert_invariant(ledger)
+    assert budget["reserved_micro"] == 3_000_000
+    assert budget["available_micro"] == 7_000_000
+
+
+def test_ambiguous_launch_with_complete_tagged_cleanup_still_cannot_refund(ledger):
+    _failed_cleanup(ledger, "r-unknown-launch", resources=False, launch_state="UNKNOWN")
+    with pytest.raises(InvalidTransition, match="confirmed launch outcome"):
+        ledger.release_after_confirmed_cleanup("r-unknown-launch", 0)
     budget = assert_invariant(ledger)
     assert budget["reserved_micro"] == 3_000_000
     assert budget["available_micro"] == 7_000_000

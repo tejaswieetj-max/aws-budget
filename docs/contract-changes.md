@@ -12,6 +12,50 @@ No frozen HTTP API, response shape, event name, tag, public reservation status, 
 
 The ledger persists budget `status=OPEN|CLOSED` and transactionally maintained `open_reservations`. Existing budget rows without these fields are rejected by the M2 ledger and require an explicit migration/backfill; no implicit initialization or balance reset is performed. Reservations must include `planned_hours` (1–24), matching the v1 request policy. Internal reservation status remains `HELD`, `ACTIVE`, `EXPIRED`, `CANCELLED`, `RELEASED`, or `SETTLED`.
 
-M3/M4 implementation adds internal Python provider and admission service interfaces only. It does not add/change an HTTP route, public response shape, event, tag, DynamoDB key, or reservation state. Ambiguous admission is represented internally by `AdmissionOutcomeUnknown`; the future API adapter must map it deliberately without reporting an unconfirmed hold as admitted. The DynamoDB `PriceCache` table remains unused by M3's process-local cache.
+M3/M4 implementation adds internal Python provider and admission service interfaces only. It does not add/change an HTTP route, public response shape, event, tag, DynamoDB key, or reservation state. Ambiguous admission is represented internally by `AdmissionOutcomeUnknown`; the future API adapter must map it deliberately without reporting an unconfirmed hold as admitted. PriceCache uses the frozen `sku_key` and adds TTL/rate/fetched-at attributes; reservations carry additive pricing provenance fields.
 
 M5 restricts the Cognito app client's write attributes so `custom:team` remains an administrative membership claim. This changes the app-client permission configuration only; no deployed pool was modified. The API's additive 501/503 statuses and error codes are listed above, with the original error envelope preserved.
+
+## M3 persistent price provenance (Task 4)
+
+PriceCache enables its `ttl` attribute for seven-day expiration and stores
+`rate_usd`/`fetched_at` with the frozen `sku_key`, behind the process-local
+cache. Reservations gain additive `price_fetched_at` beside snapshot ID/source.
+The estimate response identifies its snapshot and `source`, including explicit
+`fallback_unverified` when fallback rates are selected. No table
+key, API route, response envelope, event name, or resource tag changed.
+
+## M1 permissions boundary and hosted UI parameters (Task 5)
+
+ProvisionerRole gains a managed permissions boundary allowing EC2 actions only
+when `aws:RequestedRegion=ap-south-1`; its inline resource/tag restrictions
+remain the effective narrower policy. IdentityStack now requires a hosted UI
+domain-prefix parameter and accepts optional `cloudfront_url` context for
+callback/logout URLs while keeping localhost URLs. New CloudFormation outputs
+expose pool ID, app-client ID and hosted UI domain. No public API or table
+contract changed. No caller `sts:TagSession` permission was added pending the
+human-run verification script.
+
+## M8 billing infrastructure groundwork (Task 6)
+
+BillingStack now synthesizes private encrypted export/result buckets, a Glue
+database and a scan-limited Athena workgroup. It does not create an AWS Billing
+Data Export or alter account billing settings. These are additive resources;
+no API, ledger arithmetic, event or tag contract changed.
+
+## Confirmed workflow-failure settlement (Task 3)
+
+Added a version-1 failure settlement to the existing ledger semantics. A
+reservation can move to RELEASED after workflow FAILED/TIMED_OUT/ABORTED only
+when durable `workflow_cleanup_state=COMPLETE`, a started execution, and a
+known `workflow_launch_state` (`CREATED` or `NOT_CREATED`) exist. A created
+launch must also have persisted instance identity and launch time. The same DynamoDB
+transaction reduces reserved by the full hold, increases spent by the measured
+runtime actual, returns the unused hold to available, decrements the open count,
+and persists `settlement_stage=FINAL`, `final_actual_micro`, settlement ID and
+version. Replays with the same settlement ID/amount are no-ops. This adds fields
+to the existing reservation record, without changing table keys or API routes.
+Partial/unknown cleanup never releases funds and creates a durable alert. Runtime
+actual is prorated from recorded compute and gp3 snapshot rates, with a 60
+second minimum for a created EC2 instance; no resource means zero. This is a
+local accounting estimate, not CUR actual cost.
