@@ -41,7 +41,14 @@ from .ledger import (
 )
 from .lifecycle import lifecycle_event_id
 from .money import usd_to_micro
-from .pricing import CachedPricingProvider, InMemoryPriceCache, PriceList
+from .pricing import (
+    CachedPricingProvider,
+    DynamoDBPriceCache,
+    InMemoryPriceCache,
+    PriceList,
+    ResilientPricingProvider,
+    TieredPriceCache,
+)
 from .workflow_start import WorkflowStarter, WorkflowStartOutcomeUnknown
 
 _DESERIALIZER = TypeDeserializer()
@@ -49,9 +56,7 @@ _SERIALIZER = TypeSerializer()
 _DEVELOPER_GROUPS = {"developers", "admins"}
 _ADMIN_GROUPS = {"admins"}
 _RESERVATION_STATES = {"HELD", "ACTIVE", "EXPIRED", "CANCELLED", "RELEASED", "SETTLED"}
-_CORS_ORIGINS = set(
-    os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-)
+_CORS_ORIGINS = set(os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(","))
 
 
 @dataclass(frozen=True)
@@ -81,10 +86,14 @@ def _get_services() -> ApiServices:
     reservations = _required_env("RESERVATIONS_TABLE")
     samples = _required_env("COST_SAMPLES_TABLE")
     alerts = _required_env("ALERTS_TABLE")
+    price_cache_table = _required_env("PRICE_CACHE_TABLE")
     db = boto3.client("dynamodb", region_name=region)
     ledger = DynamoLedger(db, budgets, reservations, alerts)
     price_client = boto3.client("pricing", region_name="us-east-1")
-    pricing = CachedPricingProvider(PriceList(price_client), InMemoryPriceCache())
+    pricing = CachedPricingProvider(
+        ResilientPricingProvider(PriceList(price_client)),
+        TieredPriceCache(InMemoryPriceCache(), DynamoDBPriceCache(db, price_cache_table)),
+    )
     admission = AdmissionService(ledger, pricing)
     workflow_client = boto3.client("stepfunctions", region_name=region)
     workflow = WorkflowStarter(
@@ -96,7 +105,15 @@ def _get_services() -> ApiServices:
         boto3.client("lambda", region_name=region), _required_env("LIFECYCLE_REAPER_ARN")
     )
     return ApiServices(
-        ledger, admission, db, budgets, reservations, samples, alerts, workflow, lifecycle_dispatcher
+        ledger,
+        admission,
+        db,
+        budgets,
+        reservations,
+        samples,
+        alerts,
+        workflow,
+        lifecycle_dispatcher,
     )
 
 

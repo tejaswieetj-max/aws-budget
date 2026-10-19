@@ -101,7 +101,7 @@ class DataStack(Stack):
             sort_key=dynamodb.Attribute(name="expires_at", type=dynamodb.AttributeType.STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
-        self.prices = table("PriceCache", "sku_key")
+        self.prices = table("PriceCache", "sku_key", ttl_attribute="ttl")
         self.samples = table("CostSamples", "resource_class", "settled_at")
         self.alerts = table("Alerts", "alert_id")
 
@@ -126,6 +126,7 @@ class ApiStack(Stack):
             "RESERVATIONS_TABLE": data_stack.reservations.table_name,
             "COST_SAMPLES_TABLE": data_stack.samples.table_name,
             "ALERTS_TABLE": data_stack.alerts.table_name,
+            "PRICE_CACHE_TABLE": data_stack.prices.table_name,
             "WORKFLOW_STATE_MACHINE_ARN": state_machine_arn,
             "LIFECYCLE_REAPER_ARN": lifecycle_reaper_arn,
             "CORS_ALLOWED_ORIGINS": "http://localhost:5173",
@@ -160,6 +161,12 @@ class ApiStack(Stack):
             if pricing:
                 role.add_to_policy(
                     iam.PolicyStatement(actions=["pricing:GetProducts"], resources=["*"])
+                )
+                role.add_to_policy(
+                    iam.PolicyStatement(
+                        actions=["dynamodb:GetItem", "dynamodb:PutItem"],
+                        resources=[data_stack.prices.table_arn],
+                    )
                 )
             function = lambda_.Function(
                 self,

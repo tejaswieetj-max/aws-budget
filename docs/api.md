@@ -29,6 +29,11 @@ developer routes; `PUT /v1/budgets/{team}`, `GET /v1/calibration/summary`, and
 are restricted to the caller's team. Admin budget creation may target a team.
 
 - `POST /v1/estimate` returns 200 with the componentized M3 estimate.
+  The estimate includes integer `compute_micro`, `storage_micro`, and
+  `total_micro`, plus `price_source`, `price_snapshot_id`, and
+  The `source` value `fallback_unverified` means the service used its
+  explicitly labelled fallback rate table after a Price List lookup failure;
+  it is not a live-price result.
 - `POST /v1/requests` returns 202 for a new durable reservation or 200 for a
   replay, with the M4 admission result, reservation, and M6 workflow result.
   Only after M2 durably confirms the reservation does the handler persist the

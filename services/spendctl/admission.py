@@ -7,6 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from botocore.exceptions import (
@@ -216,6 +217,8 @@ class AdmissionService:
             "margin": str(multiplier),
             "shadow_margin_candidates": shadow_candidates,
             "price_snapshot_id": estimate["price_snapshot_id"],
+            "price_fetched_at": getattr(self.pricing, "price_fetched_at", None)
+            or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "price_source": estimate["source"],
             "estimate_breakdown": estimate["breakdown"],
             "region": estimate["region"],

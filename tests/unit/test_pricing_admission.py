@@ -19,10 +19,13 @@ from spendctl.admission import (
 from spendctl.ledger import AmbiguousLedgerOutcome, DynamoLedger, LedgerTransactionCancelled
 from spendctl.pricing import (
     CachedPricingProvider,
+    DynamoDBPriceCache,
     FixturePricingProvider,
     InMemoryPriceCache,
     PriceList,
     PriceNotFound,
+    ResilientPricingProvider,
+    TieredPriceCache,
     UnsupportedPricingConfiguration,
     estimate,
     estimate_request,
@@ -209,6 +212,48 @@ def test_price_list_sdk_failure_is_explicit_pricing_failure():
         )
 
 
+def test_price_list_failure_uses_explicitly_labelled_fallback_and_snapshot():
+    class FailedClient:
+        def get_products(self, **kwargs):
+            raise TimeoutError("price service unavailable")
+
+    logs = []
+    provider = ResilientPricingProvider(PriceList(FailedClient()), log=logs.append)
+    cached = CachedPricingProvider(provider, InMemoryPriceCache())
+    first = estimate_request(BODY, cached)
+    second = estimate_request(
+        BODY,
+        CachedPricingProvider(
+            ResilientPricingProvider(PriceList(FailedClient()), log=logs.append),
+            InMemoryPriceCache(),
+        ),
+    )
+    assert first["source"] == "fallback_unverified"
+    assert first["price_snapshot_id"] == second["price_snapshot_id"]
+    assert cached.price_fetched_at
+    assert logs and "fallback_unverified" in logs[0]
+
+
+def test_dynamodb_price_cache_persists_fetch_metadata_and_expires():
+    with mock_aws():
+        db = boto3.client("dynamodb", region_name="us-east-1")
+        db.create_table(
+            TableName="PriceCache",
+            KeySchema=[{"AttributeName": "sku_key", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "sku_key", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        clock = [1_000_000.0]
+        cache = DynamoDBPriceCache(db, "PriceCache", clock=lambda: clock[0])
+        memory = InMemoryPriceCache(clock=lambda: clock[0])
+        layered = TieredPriceCache(memory, cache)
+        layered.set("fixture:ap-south-1:ec2:t3.micro", Decimal("0.012"), 10)
+        assert layered.get("fixture:ap-south-1:ec2:t3.micro") == Decimal("0.012")
+        assert layered.fetched_at("fixture:ap-south-1:ec2:t3.micro")
+        clock[0] += 11
+        assert layered.get("fixture:ap-south-1:ec2:t3.micro") is None
+
+
 @pytest.fixture
 def ledger():
     with mock_aws():
@@ -293,6 +338,10 @@ def test_admission_reserves_atomically_and_replay_is_durable(ledger):
     assert replay["replayed"] is True
     assert replay["reservation_id"] == first["reservation_id"]
     assert first["provisioning_started"] is False
+    stored = ledger.get_reservation(first["reservation_id"])
+    assert stored["price_snapshot_id"]
+    assert stored["price_fetched_at"]
+    assert stored["price_source"] == "fixture_unverified"
     assert invariant(ledger)["reserved_micro"] == first["reserved_micro"]
 
 

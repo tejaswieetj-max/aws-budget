@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
 from typing import Protocol
 
@@ -60,6 +61,70 @@ class PriceCache(Protocol):
     def set(self, key: str, value: Decimal, ttl_seconds: int) -> None: ...
 
 
+class DynamoDBPriceCache:
+    """Seven-day persistent SKU cache with explicit fetch provenance."""
+
+    def __init__(self, client, table_name: str, *, clock: Callable[[], float] = time.time):
+        self.client = client
+        self.table_name = table_name
+        self.clock = clock
+        self._fetched_at: dict[str, str] = {}
+
+    def get(self, key: str) -> Decimal | None:
+        item = self.client.get_item(
+            TableName=self.table_name, Key={"sku_key": {"S": key}}, ConsistentRead=True
+        ).get("Item")
+        if not item or int(item.get("ttl", {}).get("N", "0")) <= int(self.clock()):
+            return None
+        fetched = item.get("fetched_at", {}).get("S")
+        if fetched:
+            self._fetched_at[key] = fetched
+        return Decimal(item["rate_usd"]["N"])
+
+    def set(self, key: str, value: Decimal, ttl_seconds: int) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        fetched = datetime.fromtimestamp(self.clock(), UTC).isoformat().replace("+00:00", "Z")
+        self._fetched_at[key] = fetched
+        self.client.put_item(
+            TableName=self.table_name,
+            Item={
+                "sku_key": {"S": key},
+                "rate_usd": {"N": str(value)},
+                "fetched_at": {"S": fetched},
+                "ttl": {"N": str(int(self.clock()) + ttl_seconds)},
+            },
+        )
+
+    def fetched_at(self, key: str) -> str | None:
+        return self._fetched_at.get(key)
+
+
+class TieredPriceCache:
+    """Keep hot rates in process memory and refill them from the shared DynamoDB cache."""
+
+    def __init__(self, memory: PriceCache, persistent: PriceCache):
+        self.memory = memory
+        self.persistent = persistent
+
+    def get(self, key: str) -> Decimal | None:
+        value = self.memory.get(key)
+        if value is not None:
+            return value
+        value = self.persistent.get(key)
+        if value is not None:
+            self.memory.set(key, value, 7 * 86400)
+        return value
+
+    def set(self, key: str, value: Decimal, ttl_seconds: int) -> None:
+        self.memory.set(key, value, ttl_seconds)
+        self.persistent.set(key, value, ttl_seconds)
+
+    def fetched_at(self, key: str) -> str | None:
+        getter = getattr(self.persistent, "fetched_at", None)
+        return getter(key) if getter else None
+
+
 class InMemoryPriceCache:
     """Process-local TTL cache, suitable for tests and single-process tools."""
 
@@ -92,6 +157,7 @@ class CachedPricingProvider:
         self.provider = provider
         self.cache = cache
         self.ttl_seconds = ttl_seconds
+        self.price_fetched_at: str | None = None
 
     @property
     def source(self) -> str:
@@ -102,7 +168,9 @@ class CachedPricingProvider:
         value = self.cache.get(key)
         if value is None:
             value = _validated_price(self.provider.instance_hourly_usd(instance_type, region), key)
+            key = f"{self.source}:{region}:ec2:{instance_type}:linux-shared-ondemand"
             self.cache.set(key, value, self.ttl_seconds)
+        self.price_fetched_at = _cache_timestamp(self.cache, key)
         return value
 
     def gp3_gb_month_usd(self, region: str = AWS_REGION) -> Decimal:
@@ -110,8 +178,73 @@ class CachedPricingProvider:
         value = self.cache.get(key)
         if value is None:
             value = _validated_price(self.provider.gp3_gb_month_usd(region), key)
+            key = f"{self.source}:{region}:ebs:gp3:gb-month"
             self.cache.set(key, value, self.ttl_seconds)
+        self.price_fetched_at = _cache_timestamp(self.cache, key)
         return value
+
+
+FALLBACK_PRICES = {"t3.micro": Decimal("0.012"), "t3.small": Decimal("0.024")}
+
+
+class ResilientPricingProvider:
+    """Fallback rates are explicitly labelled and logged after a provider failure."""
+
+    def __init__(self, primary: PricingProvider, *, log=print):
+        self.primary = primary
+        self.log = log
+        self.fallback_active = False
+
+    @property
+    def source(self) -> str:
+        return "fallback_unverified" if self.fallback_active else self.primary.source
+
+    def _fallback(self, error) -> None:
+        self.fallback_active = True
+        self.log(
+            json.dumps(
+                {
+                    "event": "PricingFallbackSelected",
+                    "source": self.source,
+                    "reason": type(error).__name__,
+                },
+                sort_keys=True,
+            )
+        )
+
+    def instance_hourly_usd(self, instance_type: str, region: str = AWS_REGION) -> Decimal:
+        _validate_sku(instance_type, region)
+        if self.fallback_active:
+            return FALLBACK_PRICES[instance_type]
+        try:
+            return self.primary.instance_hourly_usd(instance_type, region)
+        except (
+            PricingError,
+            BotoCoreError,
+            ClientError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as error:
+            self._fallback(error)
+            return FALLBACK_PRICES[instance_type]
+
+    def gp3_gb_month_usd(self, region: str = AWS_REGION) -> Decimal:
+        _validate_region(region)
+        if self.fallback_active:
+            return Decimal("0.08")
+        try:
+            return self.primary.gp3_gb_month_usd(region)
+        except (
+            PricingError,
+            BotoCoreError,
+            ClientError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as error:
+            self._fallback(error)
+            return Decimal("0.08")
 
 
 class FixturePricingProvider:
@@ -383,3 +516,8 @@ def _one_rate(rates: set[Decimal], description: str) -> Decimal:
     if len(rates) != 1:
         raise InvalidPriceResponse(f"expected one price for {description}, found {len(rates)}")
     return next(iter(rates))
+
+
+def _cache_timestamp(cache: PriceCache, key: str) -> str:
+    getter = getattr(cache, "fetched_at", None)
+    return getter(key) if getter else datetime.now(UTC).isoformat().replace("+00:00", "Z")
