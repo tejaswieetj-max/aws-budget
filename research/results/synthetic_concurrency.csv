@@ -1,0 +1,7 @@
+concurrency,requests,budget_micro,atomic_accepted,atomic_denied,atomic_over_admission_micro,atomic_transaction_conflicts,atomic_retries,atomic_reservation_latency_ms,naive_accepted,naive_denied,naive_over_admission_micro,naive_retries,naive_reservation_latency_ms,duplicate_reservations,orphaned_holds,attribution_rate,cleanup_success_rate,atomic_invariant_holds,naive_invariant_holds,latency_ms,retries,note
+1,200,250000000,87,113,0,,0,,87,113,0,0,,0,0,,,True,True,,,deterministic local schedule model; not DynamoDB timing evidence
+2,200,250000000,87,113,0,,0,,86,114,666283,0,,0,0,,,True,False,,,deterministic local schedule model; not DynamoDB timing evidence
+4,200,250000000,87,113,0,,0,,88,112,5426550,0,,0,0,,,True,False,,,deterministic local schedule model; not DynamoDB timing evidence
+8,200,250000000,87,113,0,,0,,88,112,5426550,0,,0,0,,,True,False,,,deterministic local schedule model; not DynamoDB timing evidence
+16,200,250000000,87,113,0,,0,,96,104,33406544,0,,0,0,,,True,False,,,deterministic local schedule model; not DynamoDB timing evidence
+32,200,250000000,87,113,0,,0,,96,104,33406544,0,,0,0,,,True,False,,,deterministic local schedule model; not DynamoDB timing evidence

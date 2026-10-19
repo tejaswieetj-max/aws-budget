@@ -10,21 +10,25 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
-from spendctl.calibration import MarginPolicies, Sample
 from evaluate import atomic_vs_naive_experiment, calibration_lag_sensitivity
+from spendctl.calibration import MarginPolicies, Sample
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Regenerate seeded synthetic reserve-policy, concurrency, and feedback-lag artifacts. No AWS data is used."
+    )
     parser.add_argument("--config", default="research/config.json")
     args = parser.parse_args()
     cfg = json.loads(Path(args.config).read_text())
+    _validate_config(cfg)
     rng = random.Random(cfg["seed"])
     out = Path(cfg["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
     policies = ["fixed_1.10", "rolling_quantile", "split_conformal", "adaptive"]
     records = []
     calibration = MarginPolicies(cfg["gamma"], cfg["target_alpha"])
+    reserve_floor, reserve_ceiling = map(float, cfg["reserve_bounds"])
     # Log-normal multiplicative model error with deterministic regime shift.
     ratios = [
         math.exp(rng.gauss(0.015 if i < cfg["requests"] // 2 else 0.06, 0.18))
@@ -33,19 +37,20 @@ def main():
     # Non-adaptive split conformal uses an early calibration partition, frozen before evaluation.
     split = sorted(ratios[: cfg["warmup"]])
     split_multiplier = min(
-        2.0, max(1.0, split[min(len(split) - 1, math.ceil(0.95 * (len(split) + 1)) - 1)])
+        reserve_ceiling,
+        max(reserve_floor, split[min(len(split) - 1, math.ceil(0.95 * (len(split) + 1)) - 1)]),
     )
     multiplier_hist = {p: [] for p in policies}
     for i, ratio in enumerate(ratios):
         modeled = 1_000_000
         candidates = {
-            "fixed_1.10": 1.1,
+            "fixed_1.10": cfg["fixed_multiplier"],
             "rolling_quantile": calibration.get("ec2:t3", "rolling_quantile"),
             "split_conformal": split_multiplier,
             "adaptive": calibration.get("ec2:t3", "adaptive"),
         }
         for policy, margin in candidates.items():
-            margin = min(2.0, max(1.0, margin))
+            margin = min(reserve_ceiling, max(reserve_floor, margin))
             multiplier_hist[policy].append(margin)
             reserve = modeled * margin
             actual = modeled * ratio
@@ -138,6 +143,21 @@ def main():
     with (out / "synthetic_calibration_lag.csv").open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=lag[0].keys())
         writer.writeheader(); writer.writerows(lag)
+    _write_svg(
+        out / "synthetic_concurrency.svg",
+        "Synthetic local schedule: atomic vs naive over-admission",
+        [row["concurrency"] for row in concurrency],
+        {"Atomic": [row["atomic_over_admission_micro"] for row in concurrency],
+         "Naive": [row["naive_over_admission_micro"] for row in concurrency]},
+        "Over-admission (micro-USD)",
+    )
+    _write_svg(
+        out / "synthetic_calibration_lag.svg",
+        "Synthetic adaptive reserve sensitivity to delayed feedback",
+        [row["feedback_lag_requests"] for row in lag],
+        {"Adaptive overrun frequency": [row["adaptive_overrun_frequency"] for row in lag]},
+        "Overrun frequency",
+    )
     colors = {
         "fixed_1.10": "#2563eb",
         "rolling_quantile": "#dc2626",
@@ -182,6 +202,65 @@ def main():
     svg.append("</svg>")
     (out / "synthetic_overrun.svg").write_text("\n".join(svg) + "\n")
     print(f"Wrote synthetic results to {out}; no AWS data was used.")
+
+
+def _validate_config(cfg):
+    if not isinstance(cfg, dict):
+        raise TypeError("research config must be a JSON object")
+    for field in ("seed", "requests", "teams", "budget_micro", "gamma", "target_alpha",
+                  "fixed_multiplier", "warmup", "output_dir"):
+        if field not in cfg:
+            raise ValueError(f"research config is missing {field}")
+    for field in ("requests", "teams", "budget_micro", "warmup"):
+        value = cfg[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{field} must be a positive integer")
+    if cfg["warmup"] > cfg["requests"]:
+        raise ValueError("warmup cannot exceed requests")
+    if not isinstance(cfg["seed"], int) or isinstance(cfg["seed"], bool):
+        raise TypeError("seed must be an integer")
+    if not 0.01 <= float(cfg["gamma"]) <= 0.05 or float(cfg["target_alpha"]) != 0.05:
+        raise ValueError("gamma must be in [0.01, 0.05] and target_alpha must be 0.05")
+    if float(cfg["fixed_multiplier"]) != 1.10:
+        raise ValueError("fixed_multiplier must remain the production baseline 1.10")
+    bounds = cfg.get("reserve_bounds")
+    if not isinstance(bounds, list) or len(bounds) != 2:
+        raise ValueError("reserve_bounds must contain [minimum, maximum]")
+    lower, upper = map(float, bounds)
+    if not 1.0 <= lower <= upper <= 2.0:
+        raise ValueError("reserve_bounds must be ordered within [1.0, 2.0]")
+
+
+def _write_svg(path, title, labels, series, y_label):
+    width, height = 820, 420
+    left, top, plot_width, plot_height = 80, 50, 700, 285
+    maximum = max((float(value) for values in series.values() for value in values), default=1.0)
+    maximum = maximum if maximum > 0 else 1.0
+    colors = ["#166b53", "#dc6a3d", "#7359a8"]
+    lines = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+             '<rect width="100%" height="100%" fill="white"/>',
+             f'<text x="410" y="25" text-anchor="middle" font-family="sans-serif" font-size="16">{title}</text>']
+    for tick in range(6):
+        value = maximum * tick / 5
+        y = top + plot_height * (1 - tick / 5)
+        lines.append(f'<path d="M {left} {y:.1f} H {left + plot_width}" stroke="#e1e5e3"/>')
+        lines.append(f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end" font-family="sans-serif" font-size="10">{value:.3g}</text>')
+    for index, (name, values) in enumerate(series.items()):
+        points = []
+        for i, value in enumerate(values):
+            x = left + plot_width * i / max(1, len(values) - 1)
+            y = top + plot_height * (1 - float(value) / maximum)
+            points.append(f"{x:.1f},{y:.1f}")
+            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{colors[index % len(colors)]}"/>')
+        lines.append(f'<polyline fill="none" stroke="{colors[index % len(colors)]}" stroke-width="2" points="{" ".join(points)}"/>')
+        lines.append(f'<text x="{left + 18 + index * 205}" y="390" font-family="sans-serif" font-size="11" fill="{colors[index % len(colors)]}">{name}</text>')
+    for i, label in enumerate(labels):
+        x = left + plot_width * i / max(1, len(labels) - 1)
+        lines.append(f'<text x="{x:.1f}" y="354" text-anchor="middle" font-family="sans-serif" font-size="10">{label}</text>')
+    lines.append(f'<text x="{left + plot_width / 2}" y="415" text-anchor="middle" font-family="sans-serif" font-size="11">Concurrency / feedback lag (requests)</text>')
+    lines.append(f'<text transform="translate(16 {top + plot_height / 2}) rotate(-90)" text-anchor="middle" font-family="sans-serif" font-size="11">{y_label}</text>')
+    lines.append("</svg>")
+    path.write_text("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

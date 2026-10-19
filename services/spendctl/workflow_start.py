@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-
-from .observability import emit_emf, structured_log
+import time
 
 try:
     from botocore.exceptions import (
@@ -190,32 +189,21 @@ class WorkflowStarter:
 
     def start(self, reservation: dict) -> dict:
         reservation_id = reservation["reservation_id"]
-        emit_emf("Spendctl/Workflow", {"WorkflowStartAttempts": (1, "Count")})
+        _workflow_metric("WorkflowStartAttempts")
         try:
             result = self._start(reservation)
         except WorkflowStartOutcomeUnknown as error:
-            emit_emf(
-                "Spendctl/Workflow",
-                {"WorkflowUnknownOutcomes": (1, "Count")},
-                dimensions={"result": "unknown"},
-            )
-            structured_log(
-                "M6", "start_execution", "unknown", reservation_id=reservation_id,
-                error_category=type(error).__name__,
-            )
+            _workflow_metric("WorkflowUnknownOutcomes", result="unknown")
+            _workflow_log("start_execution", "unknown", reservation_id=reservation_id,
+                          error_category=type(error).__name__)
             raise
         outcome = result.get("state", "STARTED")
         success = outcome in {"STARTED", "SUCCEEDED"}
-        emit_emf(
-            "Spendctl/Workflow",
-            {"WorkflowStartSuccesses" if success else "WorkflowStartFailures": (1, "Count")},
-            dimensions={"result": "success" if success else "failure"},
-        )
-        structured_log(
-            "M6", "start_execution", "success" if success else "failure",
-            reservation_id=reservation_id, workflow_state=outcome,
-            execution_arn=result.get("executionArn"),
-        )
+        _workflow_metric("WorkflowStartSuccesses" if success else "WorkflowStartFailures",
+                         result="success" if success else "failure")
+        _workflow_log("start_execution", "success" if success else "failure",
+                      reservation_id=reservation_id, workflow_state=outcome,
+                      execution_arn=result.get("executionArn"))
         return result
 
     def _start(self, reservation: dict) -> dict:
@@ -332,6 +320,30 @@ class WorkflowStarter:
         if state in {"START_UNKNOWN", "EXECUTION_NAME_CONFLICT"}:
             raise WorkflowStartOutcomeUnknown(reservation_id, result)
         return {**result, "execution_name": name, "reservation_released": False}
+
+
+def _workflow_metric(name: str, result: str | None = None) -> None:
+    dimensions = [["result"]] if result else [[]]
+    body = {
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [{
+                "Namespace": "Spendctl/Workflow",
+                "Dimensions": dimensions,
+                "Metrics": [{"Name": name, "Unit": "Count"}],
+            }],
+        },
+        name: 1,
+    }
+    if result:
+        body["result"] = result
+    print(json.dumps(body, sort_keys=True, separators=(",", ":")))
+
+
+def _workflow_log(operation: str, outcome: str, **fields) -> None:
+    print(json.dumps({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "service": "spendctl", "module": "M6", "operation": operation,
+                      "outcome": outcome, **fields}, sort_keys=True, separators=(",", ":")))
 
 
 def _ledger_ambiguous_errors():

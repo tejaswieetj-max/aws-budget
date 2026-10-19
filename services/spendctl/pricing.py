@@ -12,9 +12,8 @@ from typing import Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from .observability import emit_emf, structured_log
-
 from .money import MICRO_USD
+from .observability import emit_emf, structured_log
 from .validation import Request, validate_request
 
 PRICE_REGION = "us-east-1"  # AWS Price List API endpoint region, not the priced region.
@@ -210,6 +209,7 @@ class ResilientPricingProvider:
     def _fallback(self, error) -> None:
         self.fallback_active = True
         emit_emf("Spendctl/Pricing", {"FallbackPriceUsage": (1, "Count")}, dimensions={"result": "fallback"})
+        emit_emf("Spendctl/Pricing", {"PriceLookupFailures": (1, "Count")}, dimensions={"result": "failure"})
         structured_log("M3", "price_lookup", "fallback", error_category=type(error).__name__)
         self.log(
             json.dumps(

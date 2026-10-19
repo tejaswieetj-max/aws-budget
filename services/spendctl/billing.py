@@ -251,6 +251,11 @@ class BillingReconciler:
                     "BillingLedgerConflict",
                     {"reservation_id": reservation_id, "reason": type(error).__name__},
                 )
+                if "stale" in str(error).lower() or "out of order" in str(error).lower():
+                    self.emit(
+                        "BillingStaleRevision",
+                        {"reservation_id": reservation_id, "reason": type(error).__name__},
+                    )
                 raise BillingLedgerConflict(reservation_id) from error
             result.processed += 1
             result.adjustments.append(

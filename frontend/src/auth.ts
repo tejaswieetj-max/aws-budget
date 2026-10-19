@@ -14,9 +14,14 @@ export function useSpendctlAuth() {
   useEffect(() => {
     let mounted = true;
     const url = new URL(window.location.href);
+    const authorizationError = url.searchParams.get('error');
     const code = url.searchParams.get('code');
     const returnedState = url.searchParams.get('state');
-    if (code) {
+    if (authorizationError) {
+      setError(new Error(url.searchParams.get('error_description') || authorizationError));
+      window.history.replaceState({}, document.title, url.pathname);
+      setLoading(false);
+    } else if (code) {
       void redeemCode(code, returnedState).then(session => {
         if (!mounted) return;
         sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -37,20 +42,24 @@ export function useSpendctlAuth() {
 
   const removeUser = async () => { sessionStorage.removeItem(SESSION_KEY); setUser(null); };
   const signinRedirect = async () => {
-    setError(null);
-    const { domain, clientId, redirectUri } = config();
-    const verifier = randomText(48);
-    const state = randomText(24);
-    const nonce = randomText(24);
-    sessionStorage.setItem(VERIFIER_KEY, verifier);
-    sessionStorage.setItem(STATE_KEY, state);
-    sessionStorage.setItem(NONCE_KEY, nonce);
-    const challenge = base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-    const authorize = new URL('/oauth2/authorize', domain);
-    Object.entries({ client_id: clientId, response_type: 'code', scope: 'openid email profile',
-      redirect_uri: redirectUri, code_challenge_method: 'S256', code_challenge: challenge, state, nonce })
-      .forEach(([key, value]) => authorize.searchParams.set(key, value));
-    window.location.assign(authorize.toString());
+    try {
+      setError(null);
+      const { domain, clientId, redirectUri } = config();
+      const verifier = randomText(48);
+      const state = randomText(24);
+      const nonce = randomText(24);
+      sessionStorage.setItem(VERIFIER_KEY, verifier);
+      sessionStorage.setItem(STATE_KEY, state);
+      sessionStorage.setItem(NONCE_KEY, nonce);
+      const challenge = base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+      const authorize = new URL('/oauth2/authorize', domain);
+      Object.entries({ client_id: clientId, response_type: 'code', scope: 'openid email profile',
+        redirect_uri: redirectUri, code_challenge_method: 'S256', code_challenge: challenge, state, nonce })
+        .forEach(([key, value]) => authorize.searchParams.set(key, value));
+      window.location.assign(authorize.toString());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause : new Error('Sign-in could not be started.'));
+    }
   };
   const signoutRedirect = async () => {
     const { domain, clientId } = config();

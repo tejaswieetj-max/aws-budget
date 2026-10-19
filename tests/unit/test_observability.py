@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from spendctl.observability import emit_emf, structured_log
 
 

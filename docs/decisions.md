@@ -258,3 +258,13 @@ only in an opt-in test stack (`-c enable_naive=true`) and requires both
 `ADMISSION_MODE=naive` and `ALLOW_NAIVE_ADMISSION=true`. It is not wired to the
 API or standard stacks. It exists solely as a counterexample; its arithmetic
 can violate the ledger invariant under concurrency.
+
+## M9–M11 coordinated implementation
+
+M9 is an offline analyzer over operator-exported reservation and M8 billing-audit rows. It never queries AWS. Its `--provenance aws_export` flag is an operator label, so the result is still marked `AWS_EXPORT_ASSERTED_UNVERIFIED`. An observation is included only after stable ID matching, final settlement, supported configuration, required pricing provenance, and monetary validation. The analyzer does not infer from provisional lifecycle spend or unrelated CUR lines.
+
+Research candidate margins are descriptive only and never alter the fixed production reserve policy. A chronological holdout is reported only when at least 20 observations span at least two billing periods; otherwise the analysis says exploratory. Zero/negative actual values are not included in MAPE. Financial values remain integer micro-USD at row level and Decimal in aggregated metrics.
+
+M10 uses a small first-party PKCE authorization-code client against the existing Cognito hosted UI, avoiding any client secret or new runtime dependency. The ID token is supplied to the existing API Gateway authorizer, which remains the authorization boundary. The frontend derives team/group display from token claims, but makes no authorization decision beyond hiding controls. Static hosting uses private S3 and CloudFront OAC. Until `frontend/dist` is locally built, synthesis reports `FrontendAssetsSynthesized=false` and omits the BucketDeployment resource; that CloudFront endpoint must not be deployed as a complete application.
+
+M11 uses EMF from existing Lambda stdout to avoid broad `cloudwatch:PutMetricData` permissions. Metric dimensions are bounded (`result` or `operation`) and IDs remain log fields. Budget-utilization samples are dimensionless and emitted after a confirmed new reservation, so the 50/80/100% alarms are aggregate indicators based on observed admissions, not per-team notifications. SNS has no configured recipient. No tracing is activated and no CUR-lag threshold is guessed. Those live behaviors require verification before enabling operational reliance.

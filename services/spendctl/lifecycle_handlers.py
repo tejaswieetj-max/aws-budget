@@ -11,9 +11,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from .ledger import DynamoLedger, ReservationConflict, ReservationNotFound
 from .lifecycle import LifecycleService, inspect_bypass_event, process_instance_state_event
+from .observability import emit_emf, structured_log
 from .provisioner import _assume_provisioner_role, _describe_pages
 from .workflow_start import WorkflowStarter
-from .observability import emit_emf, structured_log
 
 
 def reaper_handler(event, context):

@@ -239,6 +239,8 @@ def _emit_event(name: str, detail: dict, *, ledger=None) -> None:
         ledger = ledger or _ledger()
         alert_id = f"BILLING#{name}#{hashlib.sha256(str(event_id).encode()).hexdigest()}"
         ledger.record_alert(alert_id=alert_id, alert_type=name, details=detail)
+    if name == "BillingStaleRevision":
+        _metric("BillingStaleRevisions", 1)
     bus = os.environ.get("EVENT_BUS_NAME")
     if bus:
         response = boto3.client("events", region_name=_region()).put_events(

@@ -7,6 +7,7 @@ from research.evaluate import (
     calibration_lag_sensitivity,
     estimation_metrics,
     evaluate_margins,
+    render_markdown,
 )
 
 
@@ -43,6 +44,8 @@ def test_dataset_excludes_unsettled_missing_and_invalid_configuration():
     data = _export()
     data["reservations"][0]["resource"]["instance_type"] = "m7.large"
     assert build_dataset(data)["exclusion_counts"]["unsupported_resource_configuration"] == 1
+    data = _export(actual=-1)
+    assert build_dataset(data)["exclusion_counts"]["invalid_financial_field:new_actual_micro must be nonnegative"] == 1
 
 
 def test_metrics_empty_zero_actual_and_deficit_cases_are_explicit():
@@ -52,6 +55,7 @@ def test_metrics_empty_zero_actual_and_deficit_cases_are_explicit():
     metrics = estimation_metrics([row])
     assert metrics["mape_percent"] is None
     assert metrics["mape_excluded_zero_or_negative_actual"] == 1
+    assert metrics["negative_actual_count"] == 0
     assert metrics["reserve_deficit_count"] == 0
 
 
@@ -71,7 +75,9 @@ def test_concurrency_experiment_is_reproducible_and_reports_atomic_safety():
     assert left == atomic_vs_naive_experiment(seed=42, concurrency=[1, 8], request_count=50,
                                               budget_micro=30_000_000)
     assert all(row["atomic_invariant_holds"] for row in left)
-    assert left[1]["naive_over_admission_micro"] >= 0
+    assert left[1]["naive_over_admission_micro"] > 0
+    assert left[1]["atomic_transaction_conflicts"] is None
+    assert not left[1]["naive_invariant_holds"]
     assert left[1]["atomic_reservation_latency_ms"] is None
 
 
@@ -79,3 +85,13 @@ def test_lag_sensitivity_is_seeded_and_reports_synthetic_status():
     rows = calibration_lag_sensitivity(seed=11, requests=100, lags=[0, 7])
     assert rows == calibration_lag_sensitivity(seed=11, requests=100, lags=[0, 7])
     assert all(row["classification"] == "SYNTHETIC_NOT_AWS_BILLING" for row in rows)
+
+
+def test_markdown_report_labels_provenance_and_empty_real_observations():
+    dataset = build_dataset({"reservations": [], "billing_audits": []}, provenance="aws_export")
+    report = {"dataset": dataset, "metrics": estimation_metrics([]),
+              "margin_evaluation": evaluate_margins([], [Decimal("1.10")])}
+    markdown = render_markdown(report)
+    assert "AWS_EXPORT_ASSERTED_UNVERIFIED" in markdown
+    assert "No verified real billing observations" in markdown
+    assert "recommendations only" in markdown

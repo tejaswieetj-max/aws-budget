@@ -14,6 +14,22 @@
     ],
     "fixed_multiplier": 1.1,
     "warmup": 100,
+    "concurrency_levels": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
+    ],
+    "concurrency_requests": 200,
+    "calibration_lags": [
+      0,
+      1,
+      7,
+      30
+    ],
+    "lag_requests": 1000,
     "output_dir": "research/results",
     "billing_data": "synthetic_only"
   },

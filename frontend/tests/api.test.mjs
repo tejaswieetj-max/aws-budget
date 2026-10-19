@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SpendctlApi, formatUsd } from '../src/api.mjs';
+import { prepareSubmission } from '../src/idempotency.mjs';
 
 test('API sends ID token and stable request idempotency key', async () => {
   const original = globalThis.fetch;
@@ -40,4 +41,15 @@ test('401 API responses trigger local session clearing and return contract error
 test('micro-USD formatting is safe for empty values', () => {
   assert.equal(formatUsd(1_234_567), '$1.23');
   assert.equal(formatUsd(undefined), '—');
+});
+
+test('same logical request reuses its idempotency key and changed input cannot overwrite unknown request', () => {
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const payload = { team: 'team-a', purpose: 'qa' };
+  const first = prepareSubmission(storage, payload, () => 'stable-1');
+  const replay = prepareSubmission(storage, payload, () => 'must-not-be-used');
+  assert.equal(replay.key, first.key);
+  assert.throws(() => prepareSubmission(storage, { ...payload, purpose: 'new' }, () => 'stable-2'), error => error.pendingUnknown === true);
+  assert.equal(JSON.parse(values.get('spendctl_pending_submission')).key, 'stable-1');
 });

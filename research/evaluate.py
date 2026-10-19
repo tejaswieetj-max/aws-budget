@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from dataclasses import asdict, dataclass
-from decimal import Decimal, ROUND_CEILING
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -42,10 +43,12 @@ class Observation:
 
 def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dict[str, Any]:
     """Join final billing audits to their persisted reservation; report exclusions."""
+    if not isinstance(export, dict):
+        raise TypeError("export must be an object")
     reservations = export.get("reservations", [])
     audits = export.get("billing_audits", [])
     if not isinstance(reservations, list) or not isinstance(audits, list):
-        raise ValueError("reservations and billing_audits must be arrays")
+        raise TypeError("reservations and billing_audits must be arrays")
     by_id: dict[str, dict] = {}
     duplicate_reservations: set[str] = set()
     excluded: list[dict] = []
@@ -114,6 +117,14 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
         if margin <= 0:
             excluded.append({"reservation_id": rid, "reason": "invalid_reserve_margin"})
             continue
+        actual_runtime = _optional_decimal(reservation.get("actual_runtime_hours"))
+        if actual_runtime is not None and (not actual_runtime.is_finite() or actual_runtime < 0):
+            excluded.append({"reservation_id": rid, "reason": "invalid_actual_runtime"})
+            continue
+        billing_period = str(audit.get("billing_period", ""))
+        if len(billing_period) != 7 or billing_period[4] != "-":
+            excluded.append({"reservation_id": rid, "reason": "missing_or_invalid_billing_period"})
+            continue
         if not reservation.get("price_snapshot_id") or not reservation.get("price_fetched_at"):
             excluded.append({"reservation_id": rid, "reason": "incomplete_price_provenance"})
             continue
@@ -124,7 +135,7 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
                 region=region,
                 ebs_gb=ebs_gb,
                 requested_runtime_hours=runtime,
-                actual_runtime_hours=_optional_decimal(reservation.get("actual_runtime_hours")),
+                actual_runtime_hours=actual_runtime,
                 estimated_compute_micro=compute,
                 estimated_storage_micro=storage,
                 reserve_margin=margin,
@@ -133,7 +144,7 @@ def build_dataset(export: dict[str, Any], *, provenance: str = "unknown") -> dic
                 actual_micro=actual,
                 price_snapshot_id=reservation.get("price_snapshot_id"),
                 price_fetched_at=reservation.get("price_fetched_at"),
-                billing_period=str(audit.get("billing_period", "")),
+                billing_period=billing_period,
                 reconciliation_status="FINAL",
                 provenance=provenance,
             )
@@ -155,6 +166,7 @@ def estimation_metrics(rows: list[Observation]) -> dict[str, Any]:
         return {"observation_count": 0, "mae_micro": None, "rmse_micro": None,
                 "mape_percent": None, "mean_signed_bias_micro": None,
                 "underestimate_count": 0, "overestimate_count": 0,
+                "negative_actual_count": 0,
                 "actual_to_estimated_mean": None, "reserve_deficit_count": 0,
                 "reserve_deficit_micro": 0, "worst_deficit_micro": 0,
                 "total_reserved_micro": 0, "total_actual_micro": 0, "unused_reserve_micro": 0,
@@ -171,11 +183,13 @@ def estimation_metrics(rows: list[Observation]) -> dict[str, Any]:
         "rmse_micro": _decimal_json((sum((e * e for e in errors), Decimal(0)) / n).sqrt()),
         "mape_percent": _decimal_json(sum(positive_actual, Decimal(0)) / len(positive_actual) * 100) if positive_actual else None,
         "mape_excluded_zero_or_negative_actual": sum(r.actual_micro <= 0 for r in rows),
+        "negative_actual_count": sum(r.actual_micro < 0 for r in rows),
         "mean_signed_bias_micro": _decimal_json(sum(errors, Decimal(0)) / n),
         "underestimate_count": sum(e > 0 for e in errors),
         "overestimate_count": sum(e < 0 for e in errors),
         "actual_to_estimated_mean": _decimal_json(sum(ratios, Decimal(0)) / len(ratios)) if ratios else None,
         "total_reserved_micro": sum(r.reserved_micro for r in rows),
+        "average_reserved_micro": _decimal_json(Decimal(sum(r.reserved_micro for r in rows)) / n),
         "total_actual_micro": sum(r.actual_micro for r in rows),
         "unused_reserve_micro": sum(max(0, r.reserved_micro - r.actual_micro) for r in rows),
         "reserve_deficit_count": sum(d > 0 for d in deficits),
@@ -223,6 +237,8 @@ def evaluate_margins(rows: list[Observation], candidates: list[Decimal]) -> dict
 def atomic_vs_naive_experiment(*, seed: int, concurrency: list[int], request_count: int = 100,
                                budget_micro: int = 25_000_000) -> list[dict[str, Any]]:
     """Controlled race model; naive participants read one snapshot per wave."""
+    if request_count < 1 or budget_micro < 1:
+        raise ValueError("request_count and budget_micro must be positive")
     rng = random.Random(seed)
     amounts = [rng.randint(1_000_000, 5_000_000) for _ in range(request_count)]
     reports = []
@@ -231,14 +247,12 @@ def atomic_vs_naive_experiment(*, seed: int, concurrency: list[int], request_cou
             raise ValueError("concurrency values must be positive")
         available = budget_micro
         atomic = []
-        conflicts = 0
         for amount in amounts:
             if amount <= available:
                 atomic.append(True)
                 available -= amount
             else:
                 atomic.append(False)
-                conflicts += 1
         atomic_over = sum(amounts[i] for i, accepted in enumerate(atomic) if accepted) > budget_micro
         naive_available = budget_micro
         naive_accepted = 0
@@ -254,13 +268,19 @@ def atomic_vs_naive_experiment(*, seed: int, concurrency: list[int], request_cou
             "concurrency": workers, "requests": request_count, "budget_micro": budget_micro,
             "atomic_accepted": sum(atomic), "atomic_denied": request_count - sum(atomic),
             "atomic_over_admission_micro": max(0, sum(amounts[i] for i, ok in enumerate(atomic) if ok) - budget_micro),
-            "atomic_transaction_conflicts": conflicts,
+            # The deterministic model has no DynamoDB transaction engine; do
+            # not mislabel budget denials as transaction conflicts.
+            "atomic_transaction_conflicts": None,
             "atomic_retries": 0,
             "atomic_reservation_latency_ms": None,
             "naive_accepted": naive_accepted, "naive_denied": request_count - naive_accepted,
             "naive_over_admission_micro": max(0, naive_spend - budget_micro),
             "naive_retries": 0,
             "naive_reservation_latency_ms": None,
+            "duplicate_reservations": 0,
+            "orphaned_holds": 0,
+            "attribution_rate": None,
+            "cleanup_success_rate": None,
             "atomic_invariant_holds": not atomic_over and available >= 0,
             "naive_invariant_holds": naive_available >= 0,
             "latency_ms": None, "retries": None,
@@ -273,9 +293,9 @@ def calibration_lag_sensitivity(*, seed: int, requests: int = 1000,
                                  lags: list[int] | None = None) -> list[dict[str, Any]]:
     """Measure adaptive reserve outcomes when feedback arrives after 0/1/7/30 rows."""
     from spendctl.calibration import MarginPolicies, Sample
-    import math
-
     delays = lags or [0, 1, 7, 30]
+    if requests < 1:
+        raise ValueError("requests must be positive")
     rng = random.Random(seed)
     ratios = [Decimal(str(math.exp(rng.gauss(0.03 if i < requests // 2 else 0.10, 0.2))))
               for i in range(requests)]
@@ -326,7 +346,69 @@ def main() -> None:
         report["concurrency_experiment"] = atomic_vs_naive_experiment(seed=args.seed, concurrency=[1, 2, 4, 8, 16, 32])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, default=_decimal_json) + "\n")
-    print(f"Wrote {args.output}; {len(observations)} observations, provenance={dataset['classification']}")
+    markdown_path = args.output.with_suffix(".md")
+    markdown_path.write_text(render_markdown(report))
+    print(
+        f"Wrote {args.output} and {markdown_path}; "
+        f"{len(observations)} observations, provenance={dataset['classification']}"
+    )
+
+
+def render_markdown(report: dict[str, Any]) -> str:
+    """Render a stable, timestamp-free Markdown summary alongside JSON output."""
+    dataset = report["dataset"]
+    metrics = report["metrics"]
+    lines = [
+        "# Spendctl offline research report",
+        "",
+        f"**Classification:** `{dataset['classification']}`  ",
+        f"**Included observations:** {dataset['observation_count']}  ",
+        f"**Excluded observations:** {len(dataset['exclusions'])}",
+        "",
+        (
+            "Financial figures are integer micro-USD unless identified as ratios or percentages. "
+            "Candidate margins are descriptive and do not modify production policy."
+        ),
+        "",
+        "## Estimation metrics",
+        "",
+        "| Metric | Value |",
+        "|---|---:|",
+    ]
+    metric_names = (
+        ("MAE (micro-USD)", "mae_micro"),
+        ("RMSE (micro-USD)", "rmse_micro"),
+        ("MAPE (%)", "mape_percent"),
+        ("Mean signed bias (micro-USD)", "mean_signed_bias_micro"),
+        ("Underestimates", "underestimate_count"),
+        ("Overestimates", "overestimate_count"),
+        ("Reserve deficits", "reserve_deficit_count"),
+        ("Aggregate reserve deficit (micro-USD)", "reserve_deficit_micro"),
+        ("Worst reserve deficit (micro-USD)", "worst_deficit_micro"),
+        ("Average reserved (micro-USD)", "average_reserved_micro"),
+    )
+    lines.extend(
+        f"| {label} | {metrics.get(key) if metrics.get(key) is not None else 'n/a'} |"
+        for label, key in metric_names
+    )
+    lines.extend(["", "## Candidate reserve margins", "", "| Margin | N | Insufficient | Deficit (micro-USD) | Holdout |", "|---:|---:|---:|---:|---|"])
+    for row in report["margin_evaluation"]["candidate_margins"]:
+        insufficient_percent = row["insufficient_percent"]
+        percentage = f"{insufficient_percent}%" if insufficient_percent is not None else "n/a"
+        lines.append(
+            f"| {row['margin']} | {row['sample_size']} | {row['insufficient_count']} "
+            f"({percentage}) | {row['aggregate_deficit_micro']} | {row['holdout']} |"
+        )
+    lines.extend(["", "## Exclusions", ""])
+    if dataset["exclusion_counts"]:
+        lines.extend(f"- `{reason}`: {count}" for reason, count in dataset["exclusion_counts"].items())
+    else:
+        lines.append("No records were excluded.")
+    lines.extend(["", "## Limitations", ""])
+    lines.extend(f"- {item}" for item in report["margin_evaluation"]["limitations"])
+    if dataset["observation_count"] == 0:
+        lines.append("- No verified real billing observations are present in this report.")
+    return "\n".join(lines) + "\n"
 
 
 def _int(value: Any, name: str, *, nonnegative: bool = False) -> int:

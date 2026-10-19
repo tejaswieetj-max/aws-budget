@@ -22,10 +22,10 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
-from aws_cdk import aws_s3_notifications as s3_notifications
 from aws_cdk import aws_s3_deployment as s3_deployment
-from aws_cdk import aws_sns as sns
+from aws_cdk import aws_s3_notifications as s3_notifications
 from aws_cdk import aws_scheduler as scheduler
+from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_ssm as ssm
 from aws_cdk import aws_stepfunctions as stepfunctions
@@ -1577,7 +1577,7 @@ class BillingStack(Stack):
 
 
 class WebStack(Stack):
-    """Private S3 origin served through CloudFront OAI with deploy-time outputs."""
+    """Private S3 origin served through CloudFront OAC with deploy-time outputs."""
 
     def __init__(self, scope: Construct, construct_id: str, *, user_pool_id: str,
                  user_pool_client_id: str, api_url: str, **kwargs):
@@ -1593,17 +1593,13 @@ class WebStack(Stack):
             versioned=True,
             removal_policy=RemovalPolicy.RETAIN,
         )
-        origin_identity = cloudfront.OriginAccessIdentity(self, "FrontendOriginAccess")
-        site_bucket.grant_read(origin_identity)
         self.distribution = cloudfront.Distribution(
             self, "FrontendDistribution",
             default_root_object="index.html",
             price_class=cloudfront.PriceClass.PRICE_CLASS_100,
             minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
             default_behavior=cloudfront.BehaviorOptions(
-                origin=cloudfront_origins.S3Origin(
-                    site_bucket, origin_access_identity=origin_identity
-                ),
+                origin=cloudfront_origins.S3BucketOrigin.with_origin_access_control(site_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
                 cached_methods=cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
@@ -1616,12 +1612,18 @@ class WebStack(Stack):
                                          response_page_path="/index.html", ttl=Duration.minutes(1)),
             ],
         )
-        s3_deployment.BucketDeployment(
-            self, "DeployFrontendAssets", destination_bucket=site_bucket,
-            sources=[s3_deployment.Source.asset(str(frontend_dir))],
-            distribution=self.distribution, distribution_paths=["/*"],
-            prune=False, retain_on_delete=True,
-        )
+        if frontend_dir.is_dir() and any(frontend_dir.iterdir()):
+            s3_deployment.BucketDeployment(
+                self, "DeployFrontendAssets", destination_bucket=site_bucket,
+                sources=[s3_deployment.Source.asset(str(frontend_dir))],
+                distribution=self.distribution, distribution_paths=["/*"],
+                prune=False, retain_on_delete=True,
+            )
+            CfnOutput(self, "FrontendAssetsSynthesized", value="true")
+        else:
+            # Keep offline synthesis possible, but explicitly prevent an empty
+            # bucket from being mistaken for a deployable React site.
+            CfnOutput(self, "FrontendAssetsSynthesized", value="false")
         CfnOutput(self, "FrontendUrl", value=f"https://{self.distribution.domain_name}")
         CfnOutput(self, "FrontendBucketName", value=site_bucket.bucket_name)
         CfnOutput(self, "ApiBaseUrl", value=api_url)
@@ -1662,6 +1664,7 @@ class ObservabilityStack(Stack):
         billing_failure = custom("Spendctl/Billing", "BillingReconciliationFailures")
         billing_processed = custom("Spendctl/Billing", "BillingRecordsProcessed")
         billing_attribution = custom("Spendctl/Billing", "BillingAttributionRate", unit=cloudwatch.Unit.NONE)
+        billing_stale = custom("Spendctl/Billing", "BillingStaleRevisions")
         admission_success = custom("Spendctl/Admission", "AdmissionDecision", dimension={"result": "admitted"})
         admission_denied = custom("Spendctl/Admission", "AdmissionDecision", dimension={"result": "denied"})
         admission_latency = custom("Spendctl/Admission", "AdmissionLatencyMs", dimension={"result": "admitted"}, unit=cloudwatch.Unit.MILLISECONDS)
@@ -1671,10 +1674,17 @@ class ObservabilityStack(Stack):
         price_hits = custom("Spendctl/Pricing", "PriceCacheHits", dimension={"result": "cache_hit"})
         price_misses = custom("Spendctl/Pricing", "PriceCacheMisses", dimension={"result": "cache_miss"})
         fallback = custom("Spendctl/Pricing", "FallbackPriceUsage", dimension={"result": "fallback"})
+        price_failures = custom("Spendctl/Pricing", "PriceLookupFailures", dimension={"result": "failure"})
         api_5xx = api_stack.api.metric("5xx", period=period, statistic="Sum")
         api_latency = api_stack.api.metric("Latency", period=period, statistic="Average", unit=cloudwatch.Unit.MILLISECONDS)
-        state_machine_failed = orchestration_stack.state_machine.metric_failed(period=period, statistic="Sum")
-        state_machine_succeeded = orchestration_stack.state_machine.metric_succeeded(period=period, statistic="Sum")
+        state_machine_failed = cloudwatch.Metric(
+            namespace="AWS/States", metric_name="ExecutionsFailed", period=period,
+            statistic="Sum", dimensions_map={"StateMachineArn": orchestration_stack.state_machine_arn},
+        )
+        state_machine_succeeded = cloudwatch.Metric(
+            namespace="AWS/States", metric_name="ExecutionsSucceeded", period=period,
+            statistic="Sum", dimensions_map={"StateMachineArn": orchestration_stack.state_machine_arn},
+        )
         lambda_errors = [fn.metric_errors(period=period, statistic="Sum") for fn in api_stack.api_functions.values()]
         billing_lambda_errors = billing_stack.reconciler.metric_errors(period=period, statistic="Sum")
 
@@ -1685,9 +1695,9 @@ class ObservabilityStack(Stack):
             cloudwatch.GraphWidget(title="Provisioning starts and executions", left=[workflow_success, workflow_failure, workflow_unknown, ec2_launch_successes, ec2_launch_failures, state_machine_succeeded, state_machine_failed]),
             cloudwatch.GraphWidget(title="Cleanup and unresolved resources", left=[cleanup_failure, unresolved]),
             cloudwatch.GraphWidget(title="Ledger invariant violations", left=[invariant]),
-            cloudwatch.GraphWidget(title="Billing reconciliation health", left=[billing_processed, billing_failure, billing_attribution, billing_lambda_errors]),
+            cloudwatch.GraphWidget(title="Billing reconciliation health", left=[billing_processed, billing_failure, billing_attribution, billing_stale, billing_lambda_errors]),
             cloudwatch.GraphWidget(title="Budget utilization threshold signals", left=[budget_utilization]),
-            cloudwatch.GraphWidget(title="Pricing cache and fallback", left=[price_hits, price_misses, fallback]),
+            cloudwatch.GraphWidget(title="Pricing cache and fallback", left=[price_hits, price_misses, fallback, price_failures]),
             cloudwatch.GraphWidget(title="API errors, latency and Lambda errors", left=[api_5xx, *lambda_errors], right=[api_latency]),
         )
 

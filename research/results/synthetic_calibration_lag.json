@@ -1,0 +1,38 @@
+{
+  "classification": "SYNTHETIC_NOT_AWS_BILLING",
+  "seed": 20261019,
+  "results": [
+    {
+      "feedback_lag_requests": 0,
+      "requests": 1000,
+      "adaptive_overrun_frequency": 0.007,
+      "average_reserve_multiplier": "1.8509158230642670411",
+      "seed": 20261019,
+      "classification": "SYNTHETIC_NOT_AWS_BILLING"
+    },
+    {
+      "feedback_lag_requests": 1,
+      "requests": 1000,
+      "adaptive_overrun_frequency": 0.008,
+      "average_reserve_multiplier": "1.8500158230642670411",
+      "seed": 20261019,
+      "classification": "SYNTHETIC_NOT_AWS_BILLING"
+    },
+    {
+      "feedback_lag_requests": 7,
+      "requests": 1000,
+      "adaptive_overrun_frequency": 0.008,
+      "average_reserve_multiplier": "1.8449525157210117626",
+      "seed": 20261019,
+      "classification": "SYNTHETIC_NOT_AWS_BILLING"
+    },
+    {
+      "feedback_lag_requests": 30,
+      "requests": 1000,
+      "adaptive_overrun_frequency": 0.015,
+      "average_reserve_multiplier": "1.8251009150760677039",
+      "seed": 20261019,
+      "classification": "SYNTHETIC_NOT_AWS_BILLING"
+    }
+  ]
+}

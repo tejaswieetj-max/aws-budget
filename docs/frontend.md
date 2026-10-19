@@ -19,7 +19,7 @@ npm run build
 
 No secrets belong in `.env.local`; Vite embeds `VITE_*` values into browser assets. The public client must have the corresponding callback/logout origins configured in Cognito and the API's CORS origin allowlist. Current CDK Cognito callbacks default to localhost; a CloudFront URL must be configured with the documented context value before deployment.
 
-`WebStack` creates an encrypted, versioned, private S3 bucket, an OAI-restricted CloudFront distribution with HTTPS redirect, and deployment from `frontend/dist`. Build the frontend before CDK synthesis. S3 public access is blocked. CloudFront's viewer endpoint serves only static assets; all financial reads/writes still go through authenticated API Gateway. No CloudFront URL or Cognito callback is fabricated by this source. The stack exports the CloudFront URL, API URL, pool ID, client ID and Cognito issuer. Set frontend build values from reviewed stack outputs.
+`WebStack` creates an encrypted, versioned, private S3 bucket, an OAC-restricted CloudFront distribution with HTTPS redirect, and deployment from `frontend/dist`. Build the frontend before CDK synthesis. S3 public access is blocked. CloudFront's viewer endpoint serves only static assets; all financial reads/writes still go through authenticated API Gateway. No CloudFront URL or Cognito callback is fabricated by this source. The stack exports the CloudFront URL, API URL, pool ID, client ID and Cognito issuer. Set frontend build values from reviewed stack outputs.
 
 ## Verification boundary
 

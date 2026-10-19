@@ -25,7 +25,7 @@ PYTHONPATH=services .venv/bin/python research/evaluate.py \
   --output /path/to/report.json --experiment
 ```
 
-The second command reads only a local file. Do not place customer identifiers in exports that are not required for analysis. Keep research output separate from production CostSamples and operational EMF namespaces.
+The second command reads only a local file and writes a deterministic Markdown summary next to the JSON report (`report.md`). Do not place customer identifiers in exports that are not required for analysis. Keep research output separate from production CostSamples and operational EMF namespaces.
 
 ## Limitations and falsification
 

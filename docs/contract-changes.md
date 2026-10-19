@@ -16,6 +16,10 @@ M3/M4 implementation adds internal Python provider and admission service interfa
 
 M5 restricts the Cognito app client's write attributes so `custom:team` remains an administrative membership claim. This changes the app-client permission configuration only; no deployed pool was modified. The API's additive 501/503 statuses and error codes are listed above, with the original error envelope preserved.
 
+## M9–M11 additions
+
+No API route, public request/response shape, DynamoDB key, event name, lifecycle state, or ledger semantic changed for these modules. M9 adds an offline research input/report format only. M10 calls the existing nine routes with their documented shapes. M11 adds EMF metric names and CloudFormation outputs for the WebStack URL/configuration and the dashboard/SNS topic. `WebStack` consumes the existing Cognito identifiers and API URL from stack references; `ObservabilityStack` references the existing API, Step Functions, Lifecycle and Billing resources. The frontend build configuration uses `VITE_API_BASE_URL`, `VITE_COGNITO_HOSTED_UI_DOMAIN`, `VITE_COGNITO_CLIENT_ID`, `VITE_COGNITO_REDIRECT_URI` and `VITE_COGNITO_LOGOUT_URI`; these are public browser configuration, never secrets. No external identity provider or API behavior was live-verified.
+
 ## M3 persistent price provenance (Task 4)
 
 PriceCache enables its `ttl` attribute for seven-day expiration and stores

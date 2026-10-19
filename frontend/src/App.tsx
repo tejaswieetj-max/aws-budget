@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import { useSpendctlAuth } from './auth';
 import { SpendctlApi, formatUsd } from './api.mjs';
+import { clearPendingSubmission, prepareSubmission, readPendingSubmission } from './idempotency.mjs';
 import type { Alert, Budget, Estimate, Reservation } from './types';
 
 type Page = 'dashboard' | 'estimate' | 'requests' | 'budgets' | 'alerts' | 'research';
+type PendingSubmission = { key: string; fingerprint: string; payload: Record<string, unknown> };
 const pageLabels: Record<Page, string> = { dashboard: 'Overview', estimate: 'Cost estimator', requests: 'Requests', budgets: 'Budgets', alerts: 'Alerts', research: 'Calibration' };
 
 export function App() {
@@ -25,6 +27,7 @@ export function App() {
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [budgetUsd, setBudgetUsd] = useState('');
   const [selectedRequest, setSelectedRequest] = useState<Reservation | null>(null);
+  const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(() => readPendingSubmission(sessionStorage));
 
   const claims = auth.user?.profile ?? {};
   const trustedTeam = String(claims['custom:team'] ?? claims.team ?? '');
@@ -71,23 +74,40 @@ export function App() {
     if (!estimate || !window.confirm(`Reserve ${formatUsd(estimate.total_micro)} estimate using the 1.10 margin and start the managed request?`)) return;
     setBusy(true); setNotice('');
     const payload = { team, instance_type: instanceType, region: 'ap-south-1', ebs_gb: ebsGb, duration_hours: runtime, purpose };
-    const storageKey = 'spendctl_pending_submission';
-    let pending: { key: string; fingerprint: string };
-    const fingerprint = fingerprintPayload(payload);
+    let pending: PendingSubmission | null = null;
     try {
-      const saved = sessionStorage.getItem(storageKey);
-      pending = saved ? JSON.parse(saved) : { key: crypto.randomUUID(), fingerprint };
-      if (pending.fingerprint !== fingerprint) pending = { key: crypto.randomUUID(), fingerprint };
-      sessionStorage.setItem(storageKey, JSON.stringify(pending));
+      pending = prepareSubmission(sessionStorage, payload);
+      setPendingSubmission(pending);
       const result = await api.submit(payload, pending.key);
-      sessionStorage.removeItem(storageKey);
+      clearPendingSubmission(sessionStorage);
+      setPendingSubmission(null);
       setNotice(`Request ${result.reservation_id} · ${result.reservation.status} · ${result.reservation.workflow_start_state ?? 'workflow pending'}`);
       setPage('requests');
     } catch (e) {
       const message = errorText(e);
       const unknown = Boolean((e as { pendingUnknown?: boolean }).pendingUnknown);
-      if (!unknown) sessionStorage.removeItem(storageKey);
+      if (!unknown) { clearPendingSubmission(sessionStorage); setPendingSubmission(null); }
+      else setPendingSubmission(pending ?? (e as { pending?: PendingSubmission }).pending ?? readPendingSubmission(sessionStorage));
       setNotice(unknown ? `${message} The same idempotency key is retained for a safe retry.` : message);
+    } finally { setBusy(false); }
+  };
+  const retryPendingSubmission = async () => {
+    if (!pendingSubmission || pendingSubmission.payload.team !== team) {
+      setNotice('The unresolved submission belongs to a different verified team. Sign in with its original team to reconcile it.');
+      return;
+    }
+    setBusy(true); setNotice('');
+    try {
+      const result = await api.submit(pendingSubmission.payload, pendingSubmission.key);
+      clearPendingSubmission(sessionStorage);
+      setPendingSubmission(null);
+      setNotice(`Request ${result.reservation_id} · ${result.reservation.status} · ${result.reservation.workflow_start_state ?? 'workflow pending'}`);
+      setPage('requests');
+    } catch (e) {
+      if (!(e as { pendingUnknown?: boolean }).pendingUnknown) {
+        clearPendingSubmission(sessionStorage); setPendingSubmission(null);
+      }
+      setNotice(`${errorText(e)} The original idempotency key is retained when outcome is still unknown.`);
     } finally { setBusy(false); }
   };
   const cancelRequest = async (row: Reservation) => {
@@ -106,12 +126,13 @@ export function App() {
 
   return <div className="shell">
     <aside className="sidebar"><div className="brand"><span className="brand-mark">S</span><span>spendctl<small>FINANCIAL OPERATIONS</small></span></div><div className="team-chip"><span className="status-dot" />{team}</div><nav aria-label="Main navigation">{(Object.keys(pageLabels) as Page[]).filter(p => (p !== 'alerts' && p !== 'research') || isAdmin).map(p => <button key={p} className={page === p ? 'nav-item active' : 'nav-item'} onClick={() => setPage(p)}><NavIcon name={p} />{pageLabels[p]}</button>)}</nav><div className="sidebar-foot"><div className="avatar">{String(claims.email ?? 'U').slice(0, 1).toUpperCase()}</div><div className="user-label">{String(claims.email ?? 'Signed in')}<small>{isAdmin ? 'Administrator' : 'Developer'}</small></div><button className="icon-button" aria-label="Sign out" onClick={() => auth.signoutRedirect()}>↗</button></div></aside>
-    <main className="main"><header className="topbar"><div><span className="eyebrow">SPENDCTL / {pageLabels[page].toUpperCase()}</span><h1>{page === 'dashboard' ? 'Overview' : pageLabels[page]}</h1></div><div className="top-actions"><span className="environment-pill"><span className="status-dot" />LIVE API</span><button className="secondary refresh" onClick={refresh} disabled={busy}>↻ <span>Refresh</span></button></div></header>
+    <main className="main"><header className="topbar"><div><span className="eyebrow">SPENDCTL / {pageLabels[page].toUpperCase()}</span><h1>{page === 'dashboard' ? 'Overview' : pageLabels[page]}</h1></div><div className="top-actions"><span className="environment-pill"><span className="status-dot" />SECURE API</span><button className="secondary refresh" onClick={refresh} disabled={busy}>↻ <span>Refresh</span></button></div></header>
       {notice && <div className="notice" role="status">{notice}</div>}
+      {pendingSubmission && <div className="notice warning" role="status">A request submission is awaiting reconciliation. {pendingSubmission.payload.team === team ? <button className="text-button" disabled={busy} onClick={retryPendingSubmission}>Retry the same request</button> : <span>Sign in with its original verified team before retrying.</span>}</div>}
       {busy && <div className="loading-bar" role="status">Syncing secure account data…</div>}
       {!team && <div className="notice warning">Your session has no team claim.</div>}
       {page === 'dashboard' && <Dashboard budget={budget} reservations={reservations} onPage={setPage} />}
-      {page === 'estimate' && <section className="panel estimator"><div className="panel-heading"><div><span className="eyebrow">PLAN A MANAGED RESOURCE</span><h2>Estimate your spend</h2><p>Region and supported machine sizes are fixed by policy.</p></div><span className="tag">Mumbai · ap-south-1</span></div><div className="estimate-layout"><form onSubmit={runEstimate} className="form-grid"><label>Instance type<select value={instanceType} onChange={e => setInstanceType(e.target.value)}><option>t3.micro</option><option>t3.small</option></select></label><label>gp3 storage (GB)<input type="number" min={1} max={30} value={ebsGb} onChange={e => setEbsGb(Number(e.target.value))} required /></label><label>Runtime (hours)<input type="number" min={1} max={24} value={runtime} onChange={e => setRuntime(Number(e.target.value))} required /></label><label className="wide">Purpose<input value={purpose} onChange={e => setPurpose(e.target.value)} minLength={3} maxLength={256} placeholder="e.g. temporary QA environment" required /></label><button disabled={busy} type="submit">{busy ? 'Calculating…' : 'Calculate estimate'} <span>→</span></button></form><div className="estimate-card">{estimate ? <><span className="eyebrow">ESTIMATE BREAKDOWN</span><h3>{formatUsd(estimate.total_micro)}</h3><Breakdown label="Compute" value={estimate.compute_micro} /><Breakdown label="gp3 storage" value={estimate.storage_micro} /><Breakdown label="Reserve at 1.10×" value={estimate.reserve_micro ?? Math.ceil(estimate.total_micro * 1.1)} strong /><p className="provenance">Pricing: {estimate.price_source ?? estimate.source ?? 'provider unreported'}{estimate.price_snapshot_id ? ` · ${estimate.price_snapshot_id}` : ''}</p>{(estimate.price_source ?? estimate.source)?.includes('fallback') && <p className="warning-text">Fallback price is unverified. Treat this as an estimate, not a live quote.</p>}<button className="submit-request" disabled={busy} onClick={submitRequest}>Review and submit request <span>→</span></button></> : <div className="estimate-empty"><div className="empty-icon">◈</div><h3>Your estimate will appear here</h3><p>Enter a supported configuration to see compute and storage separately.</p></div>}</div></div></section>}
+      {page === 'estimate' && <section className="panel estimator"><div className="panel-heading"><div><span className="eyebrow">PLAN A MANAGED RESOURCE</span><h2>Estimate your spend</h2><p>Region and supported machine sizes are fixed by policy.</p></div><span className="tag">Mumbai · ap-south-1</span></div><div className="estimate-layout"><form onSubmit={runEstimate} className="form-grid"><label>Instance type<select value={instanceType} onChange={e => setInstanceType(e.target.value)}><option>t3.micro</option><option>t3.small</option></select></label><label>gp3 storage (GB)<input type="number" min={1} max={30} value={ebsGb} onChange={e => setEbsGb(Number(e.target.value))} required /></label><label>Runtime (hours)<input type="number" min={1} max={24} value={runtime} onChange={e => setRuntime(Number(e.target.value))} required /></label><label className="wide">Purpose<input value={purpose} onChange={e => setPurpose(e.target.value)} minLength={3} maxLength={256} placeholder="e.g. temporary QA environment" required /></label><button disabled={busy} type="submit">{busy ? 'Calculating…' : 'Calculate estimate'} <span>→</span></button></form><div className="estimate-card">{estimate ? <><span className="eyebrow">ESTIMATE BREAKDOWN</span><h3>{formatUsd(estimate.total_micro)}</h3><Breakdown label="Compute" value={estimate.compute_micro} /><Breakdown label="gp3 storage" value={estimate.storage_micro} /><Breakdown label="Reserve at 1.10×" value={estimate.reserve_micro ?? Number((BigInt(estimate.total_micro) * 11n + 9n) / 10n)} strong /><p className="provenance">Pricing: {estimate.price_source ?? estimate.source ?? 'provider unreported'}{estimate.price_snapshot_id ? ` · ${estimate.price_snapshot_id}` : ''}</p>{(estimate.price_source ?? estimate.source)?.includes('fallback') && <p className="warning-text">Fallback price is unverified. Treat this as an estimate, not a live quote.</p>}<button className="submit-request" disabled={busy} onClick={submitRequest}>Review and submit request <span>→</span></button></> : <div className="estimate-empty"><div className="empty-icon">◈</div><h3>Your estimate will appear here</h3><p>Enter a supported configuration to see compute and storage separately.</p></div>}</div></div></section>}
       {page === 'requests' && <section className="panel"><PanelTitle eyebrow="TEAM ACTIVITY" title="Requests & reservations" count={reservations.length} /><ReservationTable rows={reservations} onCancel={cancelRequest} onDetails={async row => { setBusy(true); try { setSelectedRequest((await api.requestById(row.reservation_id)).request); } catch (e) { setNotice(errorText(e)); } finally { setBusy(false); } }} />{!reservations.length && !busy && <Empty title="No requests yet" body="Create a cost estimate to start a managed request." action={() => setPage('estimate')} />}</section>}
       {page === 'budgets' && <><section className="panel"><PanelTitle eyebrow="MONTHLY CONTROL" title="Team budget" /><BudgetView budget={budget} /></section>{isAdmin && <section className="panel admin-form"><span className="eyebrow">ADMINISTRATOR ACTION</span><h2>Create a monthly budget</h2><p>Creates a budget only if one does not already exist for the month.</p><form onSubmit={saveBudget}><label>Budget in USD<input value={budgetUsd} onChange={e => setBudgetUsd(e.target.value)} inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" placeholder="250.00" required /></label><button disabled={busy}>Create budget</button></form></section>}</>}
       {page === 'alerts' && <section className="panel"><PanelTitle eyebrow="ADMINISTRATOR VIEW" title="Active alerts" count={alerts.length} />{alerts.length ? <div className="alert-list">{alerts.map(a => <article className="alert-row" key={a.alert_id}><span className="alert-icon">!</span><div><strong>{a.alert_type}</strong><p>{JSON.stringify(a.details ?? {})}</p></div><time>{a.created_at ? new Date(a.created_at).toLocaleString() : 'Time unavailable'}</time></article>)}</div> : <Empty title="No alerts returned" body="The API returned no alert records for this account." />}</section>}
@@ -137,4 +158,3 @@ function Breakdown({ label, value, strong = false }: { label: string; value: num
 function Empty({ title, body, action }: { title: string; body: string; action?: () => void }) { return <div className="empty-state"><div className="empty-icon">⌁</div><h3>{title}</h3><p>{body}</p>{action && <button className="secondary" onClick={action}>Create estimate</button>}</div>; }
 function NavIcon({ name }: { name: string }) { const icons: Record<Page, string> = { dashboard: '▦', estimate: '◈', requests: '≡', budgets: '◷', alerts: '△', research: '⌁' }; return <span className="nav-icon" aria-hidden="true">{icons[name]}</span>; }
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
-function fingerprintPayload(payload: object) { let hash = 2166136261; for (const character of JSON.stringify(payload)) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(16); }
