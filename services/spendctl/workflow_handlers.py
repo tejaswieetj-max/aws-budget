@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
 
 import boto3
 from botocore.exceptions import ClientError
@@ -22,6 +23,7 @@ def record_resources_handler(event, context):
         volume_ids=event.get("volume_ids", []),
         execution_arn=event["execution_arn"],
         launch_state="CREATED",
+        launched_at=event.get("launched_at"),
     )
     return {"reservation": result["reservation"]}
 
@@ -54,13 +56,73 @@ def record_workflow_outcome_handler(event, context):
     reservation_id = event["reservation_id"]
     execution_status = event["execution_status"]
     cleanup_state = event.get("cleanup_state")
-    result = _ledger().record_workflow_execution(
+    ledger = _ledger()
+    terminal_failure = execution_status in {"FAILED", "TIMED_OUT", "ABORTED"}
+    terminated_at = event.get("terminated_at")
+    if terminal_failure and cleanup_state == "COMPLETE":
+        terminated_at = terminated_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    result = ledger.record_workflow_execution(
         reservation_id,
         execution_status=execution_status,
         cleanup_state=cleanup_state,
         launch_state=event.get("launch_state"),
+        terminated_at=terminated_at,
     )
+    reservation = result["reservation"]
+    if terminal_failure:
+        if cleanup_state != "COMPLETE":
+            ledger.record_alert(
+                alert_id=f"CLEANUP_UNKNOWN#{reservation_id}",
+                alert_type="WorkflowCleanupUncertain",
+                details={
+                    "reservation_id": reservation_id,
+                    "cleanup_state": cleanup_state or "UNKNOWN",
+                },
+            )
+            return {"reservation": reservation, "released": False, "state": "HELD_UNKNOWN"}
+        try:
+            actual_micro = _confirmed_failure_actual(
+                reservation, bool(event.get("had_resources")), terminated_at
+            )
+        except (KeyError, ValueError, TypeError):
+            ledger.record_alert(
+                alert_id=f"CLEANUP_COST_UNKNOWN#{reservation_id}",
+                alert_type="WorkflowCleanupUncertain",
+                details={
+                    "reservation_id": reservation_id,
+                    "reason": "runtime cost evidence is incomplete",
+                },
+            )
+            return {"reservation": reservation, "released": False, "state": "HELD_UNKNOWN"}
+        released = ledger.release_after_confirmed_cleanup(
+            reservation_id,
+            actual_micro,
+            settlement_id=f"{reservation_id}:cleanup-failure:v1",
+        )
+        return {
+            "reservation": released["reservation"],
+            "released": True,
+            "actual_micro": actual_micro,
+        }
     return {"reservation": result["reservation"]}
+
+
+def _confirmed_failure_actual(reservation: dict, had_resources: bool, terminated_at: str) -> int:
+    """Prorate recorded compute and EBS estimates over confirmed resource runtime."""
+    if not had_resources:
+        return 0
+    launched_at = reservation["launched_at"]
+    start = datetime.fromisoformat(launched_at)
+    stop = datetime.fromisoformat(terminated_at)
+    elapsed = max(Decimal(60), Decimal(str((stop - start).total_seconds())))
+    breakdown = reservation["estimate_breakdown"]
+    compute_usd_per_hour = Decimal(str(breakdown["compute_usd_per_hour"]))
+    gp3_usd_per_gb_month = Decimal(str(breakdown["gp3_usd_per_gb_month"]))
+    hours_per_month = Decimal(str(breakdown["hours_per_month"]))
+    ebs_gb = Decimal(str(reservation["resource"]["ebs_gb"]))
+    actual_usd = compute_usd_per_hour * elapsed / Decimal(3600)
+    actual_usd += gp3_usd_per_gb_month * ebs_gb * elapsed / (hours_per_month * Decimal(3600))
+    return int((actual_usd * Decimal(1_000_000)).to_integral_value(rounding=ROUND_CEILING))
 
 
 def release_prelaunch_failure_handler(event, context):
@@ -141,7 +203,9 @@ def _ensure_expiry_schedule(reservation: dict) -> None:
             or actual_target.get("RoleArn") != target_role
             or actual_target.get("Input") != target_input
         ):
-            raise RuntimeError("existing expiry schedule conflicts with durable reservation") from error
+            raise RuntimeError(
+                "existing expiry schedule conflicts with durable reservation"
+            ) from error
 
 
 def _publish_activated(reservation: dict) -> None:
@@ -149,7 +213,9 @@ def _publish_activated(reservation: dict) -> None:
     event_id = hashlib.sha256(
         f"{reservation['reservation_id']}:activated:{reservation['launched_at']}".encode()
     ).hexdigest()
-    result = boto3.client("events", region_name=os.environ.get("AWS_REGION", "ap-south-1")).put_events(
+    result = boto3.client(
+        "events", region_name=os.environ.get("AWS_REGION", "ap-south-1")
+    ).put_events(
         Entries=[
             {
                 "EventBusName": bus,

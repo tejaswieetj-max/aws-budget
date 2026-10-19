@@ -549,6 +549,131 @@ class DynamoLedger:
             return self._resolve_ambiguous_state(reservation_id, "RELEASED", error)
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
 
+    def release_after_confirmed_cleanup(
+        self,
+        reservation_id: str,
+        actual_micro: int,
+        *,
+        settlement_id: str | None = None,
+        settlement_version: int = 1,
+        released_at: str | None = None,
+    ) -> dict:
+        """Settle a failed workflow only after durable COMPLETE cleanup evidence."""
+        actual = _money(actual_micro, "actual_micro")
+        if (
+            isinstance(settlement_version, bool)
+            or not isinstance(settlement_version, int)
+            or settlement_version != 1
+        ):
+            raise ValueError("confirmed-cleanup settlement_version must be 1")
+        sid = settlement_id or f"{reservation_id}:cleanup-failure:v{settlement_version}"
+        _validate_identifier(sid, "settlement_id")
+        reservation = self.get_reservation(reservation_id)
+        if reservation.get("status") == "RELEASED":
+            if (
+                reservation.get("final_settlement_id") == sid
+                and reservation.get("final_actual_micro") == actual
+            ):
+                return {"reservation": reservation, "replayed": True}
+            raise SettlementConflict("reservation was released with a different settlement")
+        if (
+            reservation.get("status") not in {"HELD", "ACTIVE"}
+            or reservation.get("workflow_execution_status")
+            not in {"FAILED", "TIMED_OUT", "ABORTED"}
+            or reservation.get("workflow_cleanup_state") != "COMPLETE"
+        ):
+            raise InvalidTransition(
+                "budget restoration requires failed execution and confirmed COMPLETE cleanup"
+            )
+        reserve = _money(reservation.get("reserved_micro"), "reserved_micro")
+        if actual > reserve:
+            raise SettlementConflict(
+                "confirmed-cleanup actual cost cannot exceed the reserved amount"
+            )
+        self._require_open_budget(reservation["team"], reservation["budget_period"])
+        now = released_at or _now()
+        actions = [
+            self._budget_update(
+                reservation,
+                "SET available_micro = available_micro + :refund, "
+                "reserved_micro = reserved_micro - :reserve, spent_micro = spent_micro + :actual, "
+                "open_reservations = open_reservations - :one, version = version + :one, updated_at = :now",
+                "reserved_micro >= :reserve AND open_reservations >= :one AND #state = :open",
+                {
+                    ":refund": reserve - actual,
+                    ":reserve": reserve,
+                    ":actual": actual,
+                    ":one": 1,
+                    ":now": now,
+                    ":open": "OPEN",
+                },
+            ),
+            {
+                "Update": {
+                    "TableName": self.reservations,
+                    "Key": _key(_reservation_key(reservation_id)),
+                    "UpdateExpression": (
+                        "SET #state = :released, settlement_stage = :final, final_actual_micro = :actual, "
+                        "final_settlement_id = :sid, settlement_version = :version, released_at = :now, updated_at = :now"
+                    ),
+                    "ConditionExpression": (
+                        "#state IN (:held, :active) AND workflow_execution_status IN (:failed, :timeout, :aborted) "
+                        "AND workflow_cleanup_state = :complete AND attribute_not_exists(final_settlement_id)"
+                    ),
+                    "ExpressionAttributeNames": {"#state": "status"},
+                    "ExpressionAttributeValues": {
+                        ":released": _encode("RELEASED"),
+                        ":final": _encode("FINAL"),
+                        ":actual": _encode(actual),
+                        ":sid": _encode(sid),
+                        ":version": _encode(settlement_version),
+                        ":now": _encode(now),
+                        ":held": _encode("HELD"),
+                        ":active": _encode("ACTIVE"),
+                        ":failed": _encode("FAILED"),
+                        ":timeout": _encode("TIMED_OUT"),
+                        ":aborted": _encode("ABORTED"),
+                        ":complete": _encode("COMPLETE"),
+                    },
+                }
+            },
+        ]
+        try:
+            self.db.transact_write_items(TransactItems=actions)
+        except ClientError as error:
+            if _error_code(error) == "TransactionCanceledException":
+                latest = self.get_reservation(reservation_id)
+                if (
+                    latest.get("status") == "RELEASED"
+                    and latest.get("final_settlement_id") == sid
+                    and latest.get("final_actual_micro") == actual
+                ):
+                    return {"reservation": latest, "replayed": True}
+                raise InvalidTransition(
+                    "confirmed-cleanup settlement preconditions changed"
+                ) from error
+            if _ambiguous_client_error(error):
+                return self._resolve_confirmed_cleanup_ambiguous(reservation_id, sid, actual, error)
+            raise
+        except _TRANSPORT_ERRORS as error:
+            return self._resolve_confirmed_cleanup_ambiguous(reservation_id, sid, actual, error)
+        return {"reservation": self.get_reservation(reservation_id), "replayed": False}
+
+    def _resolve_confirmed_cleanup_ambiguous(self, reservation_id, sid, actual, error):
+        try:
+            current = self.get_reservation(reservation_id)
+            if (
+                current.get("status") == "RELEASED"
+                and current.get("final_settlement_id") == sid
+                and current.get("final_actual_micro") == actual
+            ):
+                return {"reservation": current, "replayed": True}
+        except _TRANSPORT_ERRORS:
+            pass
+        raise AmbiguousLedgerOutcome(
+            "confirmed-cleanup settlement outcome unknown; reconcile before retry"
+        ) from error
+
     def activate(
         self,
         reservation_id: str,
@@ -694,6 +819,8 @@ class DynamoLedger:
         volume_ids: list[str] | None = None,
         execution_arn: str | None = None,
         launch_state: str | None = None,
+        launched_at: str | None = None,
+        terminated_at: str | None = None,
     ) -> dict:
         """Persist idempotent workflow/resource outcomes without changing balances."""
         allowed_statuses = {
@@ -727,6 +854,10 @@ class DynamoLedger:
             fields["volume_ids"] = volume_ids
         if execution_arn is not None:
             fields["workflow_execution_arn"] = execution_arn
+        if launched_at is not None:
+            fields["launched_at"] = launched_at
+        if terminated_at is not None:
+            fields["terminated_at"] = terminated_at
         if launch_state is not None:
             if launch_state not in {"NOT_CREATED", "CREATED", "UNKNOWN"}:
                 raise ValueError("invalid workflow launch state")
@@ -1099,7 +1230,9 @@ class DynamoLedger:
             raise InvalidTransition("cleanup evidence requires a cancelled or expired reservation")
         current = reservation.get("workflow_cleanup_state")
         if current in ranks and ranks[current] >= ranks[cleanup_state]:
-            fields_match = terminated_at is None or reservation.get("terminated_at") == terminated_at
+            fields_match = (
+                terminated_at is None or reservation.get("terminated_at") == terminated_at
+            )
             if fields_match or reservation.get("terminated_at"):
                 return {"reservation": reservation, "replayed": True}
         names = {"#state": "status"}
@@ -1135,7 +1268,9 @@ class DynamoLedger:
                     terminated_at is None or latest.get("terminated_at")
                 ):
                     return {"reservation": latest, "replayed": True}
-                raise InvalidTransition("lifecycle cleanup evidence changed concurrently") from error
+                raise InvalidTransition(
+                    "lifecycle cleanup evidence changed concurrently"
+                ) from error
             if _ambiguous_client_error(error):
                 return self._resolve_lifecycle_cleanup_ambiguous(
                     reservation_id, cleanup_state, terminated_at, error
@@ -1150,8 +1285,13 @@ class DynamoLedger:
     def mark_expiry_event_published(self, reservation_id: str, event_id: str) -> dict:
         """Persist successful publication evidence for the stable expiry event."""
         reservation = self.get_reservation(reservation_id)
-        if reservation.get("status") != "EXPIRED" or reservation.get("settlement_stage") != "PROVISIONAL":
-            raise InvalidTransition("expiry event requires completed expiry and provisional settlement")
+        if (
+            reservation.get("status") != "EXPIRED"
+            or reservation.get("settlement_stage") != "PROVISIONAL"
+        ):
+            raise InvalidTransition(
+                "expiry event requires completed expiry and provisional settlement"
+            )
         if reservation.get("expiry_event_published"):
             if reservation.get("expiry_event_id") != event_id:
                 raise ReservationConflict("expiry event identity is immutable")
@@ -1179,9 +1319,14 @@ class DynamoLedger:
         except ClientError as error:
             if _error_code(error) == "ConditionalCheckFailedException":
                 latest = self.get_reservation(reservation_id)
-                if latest.get("expiry_event_published") and latest.get("expiry_event_id") == event_id:
+                if (
+                    latest.get("expiry_event_published")
+                    and latest.get("expiry_event_id") == event_id
+                ):
                     return {"reservation": latest, "replayed": True}
-                raise InvalidTransition("expiry event publication state changed concurrently") from error
+                raise InvalidTransition(
+                    "expiry event publication state changed concurrently"
+                ) from error
             raise
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
 
@@ -1189,7 +1334,14 @@ class DynamoLedger:
         self, reservation_id: str, *, instance_id: str, state: str, occurred_at: str
     ) -> dict:
         """Record a state-change event only for the instance durably bound to this reservation."""
-        if state not in {"pending", "running", "stopping", "stopped", "shutting-down", "terminated"}:
+        if state not in {
+            "pending",
+            "running",
+            "stopping",
+            "stopped",
+            "shutting-down",
+            "terminated",
+        }:
             raise ValueError("unsupported EC2 instance state")
         reservation = self.get_reservation(reservation_id)
         if reservation.get("instance_id") != instance_id:
@@ -1230,11 +1382,16 @@ class DynamoLedger:
         except ClientError as error:
             if _error_code(error) == "ConditionalCheckFailedException":
                 latest = self.get_reservation(reservation_id)
-                if latest.get("instance_state") == state and latest.get("instance_state_at") == occurred_at:
+                if (
+                    latest.get("instance_state") == state
+                    and latest.get("instance_state_at") == occurred_at
+                ):
                     return {"reservation": latest, "replayed": True}
                 if latest.get("instance_state_at", "") > occurred_at:
                     return {"reservation": latest, "replayed": True, "stale_event": True}
-                raise InvalidTransition("instance state event is stale or reservation is ineligible") from error
+                raise InvalidTransition(
+                    "instance state event is stale or reservation is ineligible"
+                ) from error
             raise
         return {"reservation": self.get_reservation(reservation_id), "replayed": False}
 
@@ -1317,8 +1474,10 @@ class DynamoLedger:
             current = self.get_reservation(reservation_id)
         except (ReservationNotFound, *_TRANSPORT_ERRORS, ClientError):
             current = None
-        if current and current.get("workflow_cleanup_state") == cleanup_state and (
-            terminated_at is None or current.get("terminated_at")
+        if (
+            current
+            and current.get("workflow_cleanup_state") == cleanup_state
+            and (terminated_at is None or current.get("terminated_at"))
         ):
             return {"reservation": current, "replayed": True}
         raise AmbiguousLedgerOutcome(

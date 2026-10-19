@@ -12,6 +12,7 @@ from spendctl.ledger import (
     InvalidTransition,
     ReservationConflict,
 )
+from spendctl.workflow_handlers import _confirmed_failure_actual
 
 
 @pytest.fixture
@@ -237,6 +238,77 @@ def test_prelaunch_workflow_failure_release_requires_durable_no_resource_evidenc
     budget = assert_invariant(ledger)
     assert budget["available_micro"] == budget["budget_micro"]
     assert budget["reserved_micro"] == 0
+
+
+def _failed_cleanup(ledger, rid, *, cleanup="COMPLETE", resources=True):
+    reserve(ledger, reservation_id=rid, key=f"key-{rid}")
+    ledger.set_workflow_start_state(rid, "STARTING", execution_name=f"wf-{rid}")
+    ledger.set_workflow_start_state(
+        rid,
+        "STARTED",
+        execution_name=f"wf-{rid}",
+        execution_arn=f"arn:execution:{rid}",
+        execution_status="RUNNING",
+    )
+    ledger.record_workflow_execution(
+        rid,
+        execution_status="FAILED",
+        cleanup_state=cleanup,
+        launch_state="CREATED" if resources else "NOT_CREATED",
+        launched_at="2026-10-19T10:00:00Z" if resources else None,
+        terminated_at="2026-10-19T10:00:30Z" if cleanup == "COMPLETE" else None,
+    )
+
+
+def test_confirmed_cleanup_settlement_restores_unused_budget_and_is_idempotent(ledger):
+    _failed_cleanup(ledger, "r-cleaned")
+    first = ledger.release_after_confirmed_cleanup(
+        "r-cleaned", 500_000, settlement_id="r-cleaned:cleanup-failure:v1"
+    )
+    replay = ledger.release_after_confirmed_cleanup(
+        "r-cleaned", 500_000, settlement_id="r-cleaned:cleanup-failure:v1"
+    )
+    assert first["reservation"]["status"] == "RELEASED"
+    assert replay["replayed"]
+    budget = assert_invariant(ledger)
+    assert budget["reserved_micro"] == 0
+    assert budget["spent_micro"] == 500_000
+    assert budget["available_micro"] == 9_500_000
+
+
+def test_confirmed_cleanup_without_any_instance_restores_full_reserve(ledger):
+    _failed_cleanup(ledger, "r-no-instance", resources=False)
+    result = ledger.release_after_confirmed_cleanup(
+        "r-no-instance", 0, settlement_id="r-no-instance:cleanup-failure:v1"
+    )
+    assert result["reservation"]["final_actual_micro"] == 0
+    budget = assert_invariant(ledger)
+    assert budget["available_micro"] == 10_000_000
+    assert budget["spent_micro"] == 0
+
+
+@pytest.mark.parametrize("cleanup", ["PENDING", "UNKNOWN"])
+def test_partial_or_unknown_cleanup_never_refunds(ledger, cleanup):
+    _failed_cleanup(ledger, f"r-{cleanup.lower()}", cleanup=cleanup)
+    with pytest.raises(InvalidTransition, match="confirmed COMPLETE cleanup"):
+        ledger.release_after_confirmed_cleanup(f"r-{cleanup.lower()}", 0)
+    budget = assert_invariant(ledger)
+    assert budget["reserved_micro"] == 3_000_000
+    assert budget["available_micro"] == 7_000_000
+
+
+def test_confirmed_failure_runtime_cost_uses_snapshot_rates_and_minimum_runtime():
+    reservation = {
+        "launched_at": "2026-10-19T10:00:00Z",
+        "estimate_breakdown": {
+            "compute_usd_per_hour": "0.012",
+            "gp3_usd_per_gb_month": "0.08",
+            "hours_per_month": 730,
+        },
+        "resource": {"ebs_gb": 8},
+    }
+    assert _confirmed_failure_actual(reservation, True, "2026-10-19T10:00:01Z") == 215
+    assert _confirmed_failure_actual(reservation, False, "2026-10-19T10:00:01Z") == 0
 
 
 def test_activate_cancel_provisional_final_and_correction(ledger):

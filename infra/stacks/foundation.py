@@ -598,12 +598,16 @@ class OrchestrationStack(Stack):
         record_outcome = make_lambda(
             "record_outcome",
             "spendctl.workflow_handlers.record_workflow_outcome_handler",
-            ["dynamodb:GetItem", "dynamodb:UpdateItem"],
-            [reservations_arn],
+            ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
+            [reservations_arn, data_stack.budgets.table_arn],
             {
                 "BUDGETS_TABLE": data_stack.budgets.table_name,
                 "RESERVATIONS_TABLE": data_stack.reservations.table_name,
+                "ALERTS_TABLE": data_stack.alerts.table_name,
             },
+        )
+        record_outcome.role.add_to_policy(
+            iam.PolicyStatement(actions=["dynamodb:PutItem"], resources=[data_stack.alerts.table_arn])
         )
         release_prelaunch = make_lambda(
             "release_prelaunch_failure",
@@ -704,6 +708,7 @@ class OrchestrationStack(Stack):
                             "instance_id.$": "$.launch.instance_id",
                             "volume_ids.$": "$.launch.volume_ids",
                             "execution_arn.$": "$$.Execution.Id",
+                            "launched_at.$": "$$.State.EnteredTime",
                         },
                     },
                     "ResultPath": "$.recorded_resources",
@@ -910,6 +915,7 @@ class OrchestrationStack(Stack):
                             "reservation_id.$": "$.reservation_id",
                             "execution_status": "FAILED",
                             "cleanup_state.$": "$.cleanup.cleanup_state",
+                            "had_resources.$": "$.cleanup.had_resources",
                         },
                     },
                     "Retry": retry_lambda,
